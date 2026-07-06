@@ -48,3 +48,4 @@ output/
 docker-compose.override.yml
 node_modules/
 data/conversations.db
+__pycache__/
