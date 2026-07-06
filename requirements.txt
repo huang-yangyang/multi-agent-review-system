@@ -1,0 +1,34 @@
+# ── Web Framework ──
+django>=6.0
+djangorestframework>=3.17
+django-cors-headers>=4.9
+
+# ── Agent Framework ──
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+
+# ── Infrastructure ──
+chromadb>=0.5.0
+redis>=5.2.0
+python-dotenv>=1.0.0
+httpx>=0.28.0
+
+# ── RAG Document Parsing ──
+PyPDF2>=3.0.0
+python-docx>=1.0.0
+PyMuPDF>=1.24.0
+paddlepaddle>=3.0.0
+paddleocr>=2.9.0
+
+# ── Embedding & Retrieval ──
+sentence-transformers>=2.7.0
+faiss-cpu>=1.8.0
+
+# ── Chinese Tokenization & BM25 ──
+jieba>=0.42.1
+rank-bm25>=0.2.2
+
+# ── Numerical & System ──
+numpy>=1.26.0
+psutil>=5.9.0

@@ -1,0 +1,38 @@
+# Multi-Agent System — 生产级 Docker 镜像
+# 构建: docker build -f Dockerfile.prod -t multi-agent:latest .
+# 运行: docker compose -f docker-compose.prod.yml up -d
+
+FROM python:3.12-slim-bookworm
+
+LABEL org.opencontainers.image.title="Multi-Agent System"
+LABEL org.opencontainers.image.description="Enterprise document review & analysis platform"
+
+# ── 系统依赖 ──
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── 应用 ──
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    MAS_ENV=production
+
+# 依赖层（利用 Docker 层缓存）
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 代码层
+COPY . .
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+
+EXPOSE 8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

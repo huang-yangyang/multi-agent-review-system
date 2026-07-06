@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Agent System — Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;background:#0a0e14;color:#c9d1d9;min-height:100vh;line-height:1.6}
+header{background:#12171f;border-bottom:1px solid #1f2937;padding:14px 32px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+header h1{font-size:18px;font-weight:600;color:#58a6ff;letter-spacing:.5px}
+header .badge{font-size:11px;padding:3px 10px;border-radius:12px;background:#1a2332;color:#8b949e;border:1px solid #30363d}
+.tabs{display:flex;gap:0;background:#12171f;border-bottom:1px solid #1f2937;padding:0 32px;overflow-x:auto}
+.tab{padding:12px 24px;cursor:pointer;color:#8b949e;font-size:13px;border-bottom:2px solid transparent;transition:all .2s;user-select:none;white-space:nowrap}
+.tab:hover{color:#c9d1d9}
+.tab.active{color:#58a6ff;border-bottom-color:#58a6ff}
+main{max-width:96%;margin:0 auto;padding:24px 20px}
+.panel{display:none}
+.panel.active{display:block}
+
+/* ===== Search Bar (top) ===== */
+.search-bar{display:flex;gap:10px;align-items:center;margin-bottom:24px;background:#12171f;border:1px solid #1f2937;border-radius:12px;padding:16px 20px}
+.search-bar .s-icon-wrap{flex-shrink:0;width:20px;height:20px;color:#484f58}
+.search-bar .input-wrap{flex:1;position:relative}
+.search-bar input{width:100%;background:transparent;border:none;color:#c9d1d9;font-size:15px;padding:4px 0;outline:none;caret-color:#58a6ff}
+.search-bar input::placeholder{color:#484f58}
+.search-bar .s-btn{background:#1f6feb;color:#fff;border:none;border-radius:8px;padding:9px 22px;font-size:13px;cursor:pointer;white-space:nowrap;font-weight:500;transition:all .2s}
+.search-bar .s-btn:hover{background:#388bfd;transform:translateY(-1px)}
+.search-bar .s-btn:active{transform:translateY(0)}
+.search-bar .s-hint{font-size:11px;color:#484f58;white-space:nowrap}
+
+/* Search Results Panel */
+.search-results-panel{margin-bottom:24px;border:1px solid #1f2937;border-radius:12px;background:#12171f;display:none}  
+.search-results-panel.active{display:block}
+.search-results-panel .sr-header{padding:12px 20px;border-bottom:1px solid #1f2937;display:flex;justify-content:space-between;align-items:center}
+.search-results-panel .sr-title{font-size:13px;color:#e6edf3;font-weight:500}
+.search-results-panel .sr-stats{font-size:11px;color:#8b949e;padding:6px 20px;border-bottom:1px solid #1a2332;background:#0d1117}
+.search-results-panel .sr-list{padding:12px;max-height:750px;overflow-y:auto}
+.result-card{background:#0d1117;border:1px solid #1a2332;border-radius:8px;padding:15px;margin-bottom:8px;animation:fadeIn .3s}
+.result-card:last-child{margin-bottom:0}
+.result-card:hover{border-color:#30363d;cursor:pointer}
+.result-card .r-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px}
+.result-card .r-docid{font-size:12px;color:#58a6ff;font-weight:500;word-break:break-all;flex:1}
+.result-card .r-score-wrap{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.result-card .r-score-bar{width:60px;height:4px;background:#1f2937;border-radius:2px;overflow:hidden}
+.result-card .r-score-fill{height:100%;background:linear-gradient(90deg,#1f6feb,#58a6ff);border-radius:2px}
+.result-card .r-score-val{font-size:11px;color:#58a6ff;font-weight:600;min-width:38px}
+.result-card .r-chunk{font-size:13px;color:#c9d1d9;line-height:1.6;max-height:65px;overflow:hidden;position:relative}
+.no-results{padding:32px 20px;text-align:center;color:#8b949e}
+.no-results svg{width:36px;height:36px;margin-bottom:10px;opacity:.4}
+.no-results p{font-size:13px;color:#8b949e}
+.no-results .sub{font-size:11px;color:#484f58;margin-top:4px}
+
+/* ===== Doc Management Row ===== */
+.doc-row{display:flex;gap:24px;align-items:flex-start}
+.doc-row .left-col{flex:1;min-width:280px;display:flex;flex-direction:column;gap:20px}
+.doc-row .right-col{flex:2;min-width:0}
+
+/* Upload Card (compact) */
+.upload-card{background:#12171f;border:1px solid #1f2937;border-radius:12px;padding:20px}
+.upload-card .uc-title{font-size:13px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.8px;margin-bottom:14px}
+.drop-zone{border:2px dashed #30363d;border-radius:10px;padding:28px 16px;text-align:center;cursor:pointer;transition:all .25s;background:linear-gradient(135deg,#0d1117 0%,#12171f 50%,#0d1117 100%)}
+.drop-zone svg{width:36px;height:36px;color:#484f58;margin-bottom:10px;transition:all .25s}
+.drop-zone p{color:#6e7681;font-size:12px;line-height:1.5}
+.drop-zone p strong{color:#58a6ff;font-weight:600}
+.drop-zone:hover,.drop-zone.dragover{border-color:#58a6ff;background:linear-gradient(135deg,#12171f 0%,#161b24 50%,#12171f 100%);box-shadow:0 0 24px rgba(88,166,255,0.06)}
+.drop-zone:hover svg,.drop-zone.dragover svg{color:#58a6ff;transform:translateY(-2px)}
+.drop-zone .type-tags{display:flex;gap:5px;margin-top:12px;flex-wrap:wrap;justify-content:center}
+.type-tag{font-size:10px;padding:2px 8px;border-radius:8px;background:#1a2332;color:#8b949e;border:1px solid #30363d;font-weight:500}
+.type-tag.pdf{color:#f85149;border-color:#3a1a1a}
+.type-tag.docx{color:#58a6ff;border-color:#1a2a3a}
+.type-tag.md{color:#3fb950;border-color:#1a3a2a}
+.type-tag.txt{color:#8b949e;border-color:#30363d}
+.upload-progress{margin-top:12px;display:none}
+.upload-progress.active{display:block}
+.upload-progress .bar-label{font-size:10px;color:#8b949e;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.upload-progress .bar-bg{height:3px;background:#1f2937;border-radius:2px;overflow:hidden}
+.upload-progress .bar-fill{height:100%;width:0;background:#1f6feb;border-radius:2px;transition:width .25s}
+#upload-status{margin-top:10px}
+#upload-status .msg{padding:6px 10px;border-radius:6px;font-size:11px;margin-bottom:4px;animation:fadeIn .3s}
+#upload-status .msg.success{background:#1a3a2a;border:1px solid #2a5a3a;color:#3fb950}
+#upload-status .msg.error{background:#2a1a1a;border:1px solid #5a2a2a;color:#f85149}
+#upload-status .msg.info{background:#1a2332;border:1px solid #30363d;color:#58a6ff}
+
+/* File List Card */
+.files-card{background:#12171f;border:1px solid #1f2937;border-radius:12px}
+.files-card .fc-header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #1f2937}
+.files-card .fc-title{font-size:13px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.8px}
+.files-card .count-badge{font-size:11px;padding:2px 10px;border-radius:10px;background:#1a2332;color:#8b949e;border:1px solid #30363d}
+.files-card .fc-body{padding:12px 0}
+
+.file-table{width:100%;border-collapse:collapse}
+.file-table th{text-align:left;padding:8px 16px;font-size:10px;color:#484f58;font-weight:500;border-bottom:1px solid #1f2937;text-transform:uppercase;letter-spacing:.6px}
+.file-table td{padding:8px 16px;font-size:13px;border-bottom:1px solid #1a2332;color:#c9d1d9;transition:background .15s}
+.file-table tbody tr:hover td{background:#161b24}
+.file-table .fname{color:#e6edf3;word-break:break-all;display:flex;align-items:center;gap:8px}
+.file-table .fname .ficon{font-size:15px;flex-shrink:0;width:20px;text-align:center}
+.file-table .size{color:#8b949e;white-space:nowrap;font-size:12px}
+.file-table .time{color:#8b949e;white-space:nowrap;font-size:12px}
+.file-table .stag{font-size:10px;padding:2px 8px;border-radius:8px;white-space:nowrap;font-weight:500;letter-spacing:.3px}
+.file-table .stag.indexed{background:#1a3a2a;color:#3fb950;border:1px solid #2a5a3a}
+.file-table .stag.stored_only{background:#2a2a1a;color:#d2991d;border:1px solid #4a4a2a}
+.file-table .stag.duplicate{background:#2a1a1a;color:#f85149;border:1px solid #5a2a2a}
+.file-table .stag.index_error{background:#3a2a1a;color:#f0883e;border:1px solid #5a3a2a}
+.file-table .stag.type-td{background:#1a2332;color:#8b949e;border:1px solid #30363d;font-size:10px;padding:1px 6px}
+
+.btn-del{background:transparent;border:1px solid transparent;color:#484f58;cursor:pointer;padding:3px 7px;border-radius:6px;font-size:13px;transition:all .2s;line-height:1}
+.btn-del:hover{color:#f85149;border-color:#3a1a1a;background:#2a1a1a}
+
+.empty-state{text-align:center;padding:36px 20px;color:#484f58}
+.empty-state svg{width:44px;height:44px;margin-bottom:12px;opacity:.4}
+.empty-state p{font-size:13px;color:#8b949e}
+.empty-state .sub{font-size:11px;color:#484f58;margin-top:4px}
+
+/* Confirm Dialog */
+.confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000;animation:fadeIn .2s}
+.confirm-box{background:#12171f;border:1px solid #30363d;border-radius:12px;padding:24px 28px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+.confirm-box h4{font-size:15px;color:#e6edf3;margin-bottom:8px}
+.confirm-box .confirm-msg{font-size:13px;color:#8b949e;margin-bottom:6px;word-break:break-all}
+.confirm-box .confirm-hint{font-size:11px;color:#f85149;margin-bottom:20px}
+.confirm-box .confirm-btns{display:flex;gap:10px;justify-content:flex-end}
+.confirm-box .btn-cancel{background:#1f2937;color:#c9d1d9;border:1px solid #30363d;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px;transition:all .15s}
+.confirm-box .btn-cancel:hover{background:#30363d}
+.confirm-box .btn-confirm{background:#da3633;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
+.confirm-box .btn-confirm:hover{background:#f85149}
+
+/* Detail Modal */
+.detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.65);display:none;align-items:center;justify-content:center;z-index:1001;animation:fadeIn .2s}
+.detail-overlay.active{display:flex}
+.detail-box{background:#12171f;border:1px solid #30363d;border-radius:12px;padding:24px 28px;max-width:720px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+.detail-box .dt-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;gap:12px}
+.detail-box .dt-title{font-size:14px;color:#58a6ff;font-weight:500;word-break:break-all;flex:1}
+.detail-box .dt-close{color:#484f58;cursor:pointer;font-size:20px;line-height:1;padding:0 4px;transition:color .15s;flex-shrink:0;background:none;border:none}
+.detail-box .dt-close:hover{color:#f85149}
+.detail-box .dt-body{font-size:14px;color:#c9d1d9;line-height:1.8;overflow-y:auto;flex:1;white-space:pre-wrap;word-break:break-all}
+
+/* Toast */
+.toast{position:fixed;top:24px;right:24px;z-index:1001;padding:12px 18px;border-radius:8px;font-size:13px;animation:fadeIn .3s;max-width:360px;box-shadow:0 4px 16px rgba(0,0,0,0.4)}
+.toast.success{background:#1a3a2a;border:1px solid #2a5a3a;color:#3fb950}
+.toast.error{background:#2a1a1a;border:1px solid #5a2a2a;color:#f85149}
+
+/* Dashboard */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
+.stat-card{background:#12171f;border:1px solid #1f2937;border-radius:10px;padding:20px}
+.stat-card .label{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
+.stat-card .value{font-size:28px;font-weight:700;color:#e6edf3;margin-top:4px}
+.stat-card .sub{font-size:11px;color:#484f58;margin-top:4px}
+.stat-card.accent .value{color:#58a6ff}
+.stat-card.success .value{color:#3fb950}
+.stat-card.warn .value{color:#d2991d}
+
+/* ===== 统计胶囊条 (stats-bar) ===== */
+.stats-bar{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.stats-bar .stat-pill{display:flex;align-items:center;gap:12px;background:rgba(20,26,43,0.8);border:1px solid rgba(148,163,220,0.15);border-radius:12px;padding:14px 20px;min-width:180px;flex:1;cursor:pointer;transition:all .25s}
+.stats-bar .stat-pill:hover{border-color:rgba(148,163,220,0.35);background:rgba(27,34,56,0.9)}
+.stats-bar .stat-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0}
+.stats-bar .stat-info{display:flex;flex-direction:column}
+.stats-bar .stat-value{font-size:22px;font-weight:700;color:#e6eaf5;line-height:1.2}
+.stats-bar .stat-label{font-size:12px;color:#6b7494;margin-top:2px}
+.agents-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:24px}
+.agent-card{background:#12171f;border:1px solid #1f2937;border-radius:10px;padding:20px}
+.agent-card .agent-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.agent-card .agent-name{font-size:16px;font-weight:600;color:#e6edf3}
+.agent-card .status-dot{width:8px;height:8px;border-radius:50%;background:#3fb950;display:inline-block;margin-right:6px;box-shadow:0 0 6px #3fb950}
+.agent-card .metrics{display:flex;gap:24px}
+.agent-card .metric .m-label{font-size:11px;color:#8b949e}
+.agent-card .metric .m-value{font-size:18px;font-weight:600;color:#e6edf3;margin-top:2px}
+.log-panel{background:#12171f;border:1px solid #1f2937;border-radius:10px;padding:20px}
+.log-panel h3{font-size:16px;color:#e6edf3;margin-bottom:12px}
+.log-entry{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #1f2937;font-size:13px;font-family:'SF Mono',monospace}
+.log-entry:last-child{border-bottom:none}
+.log-entry .log-time{color:#484f58;white-space:nowrap;min-width:80px}
+.log-entry .log-level{font-weight:600;min-width:48px}
+.log-entry .log-level.INFO{color:#58a6ff}
+.log-entry .log-level.WARN{color:#d2991d}
+.log-entry .log-agent{color:#8b949e;min-width:140px}
+.log-entry .log-msg{color:#c9d1d9}
+.loading{color:#8b949e;font-size:13px;padding:20px;text-align:center}
+
+@keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+
+/* Responsive */
+@media(max-width:860px){
+  .doc-row{flex-direction:column}
+  .doc-row .left-col,.doc-row .right-col{flex:auto;width:100%}
+  .search-bar .s-hint{display:none}
+  .search-bar{padding:12px}
+}
+@media(max-width:768px){
+  header{padding:12px 16px}
+  header h1{font-size:16px}
+  .tabs{padding:0 16px}
+  main{padding:16px}
+  .file-table .time{display:none}
+}
+
+/* ===== Semantic Cache Panel ===== */
+.cache-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #1f2937}
+.cache-toolbar-spacer{flex:1}
+.cache-title{font-size:16px;font-weight:600;color:#e6edf3}
+.cache-count{font-size:12px;padding:3px 12px;border-radius:12px;background:rgba(88,166,255,0.1);color:#58a6ff;border:1px solid rgba(88,166,255,0.2);font-weight:500}
+.cache-btn{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:6px 14px;border-radius:7px;border:1px solid #30363d;cursor:pointer;transition:all .2s;font-weight:500}
+.cache-btn-refresh{background:#1a2332;color:#c9d1d9}
+.cache-btn-refresh:hover{background:#212e3f;border-color:#58a6ff;color:#58a6ff}
+.cache-btn-clear{background:rgba(248,81,73,0.08);color:#f85149;border-color:rgba(248,81,73,0.25)}
+.cache-btn-clear:hover{background:rgba(248,81,73,0.18);border-color:#f85149}
+
+.cache-loading-msg{display:flex;align-items:center;justify-content:center;gap:10px;padding:40px;color:#8b949e;font-size:13px}
+.spinner{width:18px;height:18px;border:2px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.cache-empty-msg{display:flex;flex-direction:column;align-items:center;gap:8px;padding:60px 20px;color:#8b949e}
+.cache-empty-msg p{font-size:14px;color:#c9d1d9}
+.cache-empty-msg span{font-size:12px}
+.cache-error{padding:24px;color:#f85149;text-align:center;font-size:13px}
+.cache-no-match{padding:24px;text-align:center;color:#8b949e;font-size:13px}
+
+/* 分类卡片 */
+.cache-domain-cards{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px}
+.cache-domain-card{display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:10px;background:#0d1117;border:1px solid #1a2332;cursor:pointer;transition:all .2s;user-select:none;min-width:100px}
+.cache-domain-card:hover{border-color:#30363d;transform:translateY(-1px)}
+.cache-domain-card.active{border-color:#58a6ff;background:rgba(88,166,255,0.06);box-shadow:0 0 12px rgba(88,166,255,0.08)}
+.cache-domain-card .dc-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.cache-domain-card .dc-body{display:flex;flex-direction:column;gap:2px}
+.cache-domain-card .dc-label{font-size:12.5px;font-weight:600;color:#c9d1d9}
+.cache-domain-card .dc-count{font-size:11px;color:#8b949e}
+.cache-domain-card .dc-del{width:22px;height:22px;border-radius:5px;border:none;background:transparent;color:#484f58;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s;flex-shrink:0;margin-left:4px}
+.cache-domain-card .dc-del:hover{background:rgba(248,81,73,0.15);color:#f85149}
+.cache-domain-card .dc-del svg{width:13px;height:13px}
+
+/* 条目列表 */
+.cache-entry-list{display:flex;flex-direction:column;gap:4px}
+.cache-row{display:flex;align-items:flex-start;gap:10px;padding:12px 16px;border-radius:8px;background:#0d1117;border:1px solid #1a2332;transition:all .2s}
+.cache-row:hover{border-color:#30363d;background:#12171f}
+.cache-row-body{flex:1;min-width:0}
+.cache-row-q{font-size:13px;font-weight:500;color:#c9d1d9;line-height:1.45;word-break:break-all;margin-bottom:6px}
+.cache-row-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.cache-domain-badge{font-size:10px;font-weight:600;padding:2px 8px;border-radius:5px;text-transform:uppercase;letter-spacing:.3px}
+.cache-domain-badge.dm-finance{background:rgba(255,107,107,0.12);color:#ff6b6b}
+.cache-domain-badge.dm-contract{background:rgba(250,176,5,0.12);color:#fab005}
+.cache-domain-badge.dm-law{background:rgba(165,180,252,0.12);color:#a5b4fc}
+.cache-domain-badge.dm-legal{background:rgba(165,180,252,0.12);color:#a5b4fc}
+.cache-domain-badge.dm-general{background:rgba(139,148,158,0.12);color:#8b949e}
+.cache-src-tag{font-size:10px;padding:2px 8px;border-radius:4px;background:#1a2332;color:#8b949e;border:1px solid #30363d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.cache-row-time{font-size:10px;color:#484f58;font-family:monospace;margin-left:auto}
+.cache-row-del{width:26px;height:26px;border-radius:5px;border:none;background:transparent;color:#484f58;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;opacity:0}
+.cache-row:hover .cache-row-del{opacity:1}
+.cache-row-del:hover{background:rgba(248,81,73,0.15);color:#f85149}
+.cache-row-del svg{width:14px;height:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Multi-Agent System — Admin</h1>
+  <span class="badge">Port 8000</span>
+</header>
+<div class="tabs">
+  <div class="tab active" data-panel="upload">文件管理</div>
+  <div class="tab" data-panel="dashboard">自动化数据</div>
+  <div class="tab" data-panel="cache">语义缓存</div>
+</div>
+<main>
+  <!-- ===== 全局统计胶囊条 ===== -->
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-pill">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#8b5cf6,#6366f1)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+      </div>
+      <div class="stat-info">
+        <div class="stat-value" id="s-conversations">0</div>
+        <div class="stat-label">当前会话</div>
+      </div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#22d3ee,#0ea5e9)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+      </div>
+      <div class="stat-info">
+        <div class="stat-value" id="s-kb-files">0</div>
+        <div class="stat-label">知识库文件</div>
+      </div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#f59e0b,#ef4444)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      </div>
+      <div class="stat-info">
+        <div class="stat-value" id="s-kb-chunks">0</div>
+        <div class="stat-label">索引分块</div>
+      </div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#34d399,#10b981)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <div class="stat-info">
+        <div class="stat-value" id="s-logs">0</div>
+        <div class="stat-label">轨迹事件</div>
+      </div>
+    </div>
+    <div class="stat-pill" onclick="switchToCacheTab()">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
+      </div>
+      <div class="stat-info">
+        <div class="stat-value" id="s-cache">0</div>
+        <div class="stat-label">语义缓存</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== Tab: 文件管理 ======================== -->
+  <div id="panel-upload" class="panel active">
+
+    <!-- Document Row: Left (上传+已上传) + Right (搜索+结果) -->
+    <div class="doc-row">
+      <!-- Left Column: 上传文档 + 已上传文档 -->
+      <div class="left-col">
+        <!-- Upload Card -->
+        <div class="upload-card">
+          <div class="uc-title">上传文档</div>
+          <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+            <p>拖拽文件或<br><strong>点击此处选择</strong></p>
+            <div class="type-tags">
+              <span class="type-tag pdf">PDF</span>
+              <span class="type-tag docx">DOCX</span>
+              <span class="type-tag md">MD</span>
+              <span class="type-tag txt">TXT</span>
+            </div>
+            <input type="file" id="file-input" style="display:none" multiple accept=".pdf,.doc,.docx,.md,.txt,.csv">
+          </div>
+          <div class="upload-progress" id="upload-progress">
+            <div class="bar-label" id="progress-label">准备上传...</div>
+            <div class="bar-bg"><div class="bar-fill" id="progress-fill"></div></div>
+          </div>
+          <div id="upload-status"></div>
+        </div>
+
+        <!-- File List Card -->
+        <div class="files-card">
+          <div class="fc-header">
+            <span class="fc-title">已上传文档</span>
+            <span class="count-badge" id="file-count-badge">加载中...</span>
+          </div>
+          <div class="fc-body">
+            <div id="file-list-content" class="loading">加载中...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: 搜索 + 搜索结果 -->
+      <div class="right-col">
+        <!-- Search Bar -->
+        <div class="search-bar">
+          <svg class="s-icon-wrap" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          <div class="input-wrap">
+            <input type="text" id="search-input" placeholder="搜索已上传文档内容...">
+          </div>
+          <button class="s-btn" onclick="doSearch()">搜索</button>
+          <span class="s-hint">Enter 搜索</span>
+        </div>
+
+        <!-- Search Results (hidden until search) -->
+        <div class="search-results-panel" id="search-panel">
+          <div class="sr-header">
+            <span class="sr-title">搜索结果</span>
+            <span style="font-size:11px;color:#484f58;cursor:pointer" onclick="closeSearch()">关闭</span>
+          </div>
+          <div class="sr-stats" id="search-stats"></div>
+          <div class="sr-list" id="search-list"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ======================== Tab: 自动化数据 ======================== -->
+  <div id="panel-dashboard" class="panel">
+    <div class="stats-grid">
+      <div class="stat-card accent"><div class="label">工作流运行</div><div class="value" id="s-total">-</div><div class="sub">总执行次数</div></div>
+      <div class="stat-card success"><div class="label">成功率</div><div class="value" id="s-rate">-</div><div class="sub">最近 200 次</div></div>
+      <div class="stat-card"><div class="label">CPU</div><div class="value" id="s-cpu">-</div><div class="sub">系统负载</div></div>
+      <div class="stat-card warn"><div class="label">内存</div><div class="value" id="s-mem">-</div><div class="sub" id="s-mem-sub">-</div></div>
+    </div>
+    <div class="agents-grid" id="agents-grid"></div>
+    <div class="log-panel">
+      <h3>最近日志</h3>
+      <div id="log-content" class="loading">加载中...</div>
+    </div>
+  </div>
+
+  <!-- ======================== Tab: 语义缓存 ======================== -->
+  <div id="panel-cache" class="panel">
+    <div class="cache-toolbar">
+      <span class="cache-title">语义缓存管理</span>
+      <span class="cache-count" id="cache-total-count">0 条</span>
+      <div class="cache-toolbar-spacer"></div>
+      <button class="cache-btn cache-btn-refresh" onclick="loadCacheList()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+        刷新
+      </button>
+      <button class="cache-btn cache-btn-clear" onclick="clearAllCache()" title="清空全部缓存">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+        清空全部
+      </button>
+    </div>
+    <div id="cache-loading" class="cache-loading-msg" style="display:none;">
+      <div class="spinner"></div>
+      <span>加载中...</span>
+    </div>
+    <div id="cache-empty" class="cache-empty-msg" style="display:none;">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="40" height="40" stroke-width="1.2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7m16 0v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5m16 0h-2.586a1 1 0 0 0-.707.293l-2.414 2.414a1 1 0 0 1-.707.293h-3.172a1 1 0 0 1-.707-.293l-2.414-2.414A1 1 0 0 0 6.586 13H4"/></svg>
+      <p>暂无缓存数据</p>
+      <span>提问后系统会自动缓存回答，加速后续相似问题的响应</span>
+    </div>
+    <!-- 分类卡片 -->
+    <div id="cache-domains" class="cache-domain-cards" style="display:none;"></div>
+    <!-- 条目列表 -->
+    <div id="cache-list" class="cache-entry-list"></div>
+  </div>
+</main>
+
+<script>
+// ===== Tab Switching =====
+document.querySelectorAll('.tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    var panel = tab.dataset.panel;
+    document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+    tab.classList.add('active');
+    document.getElementById('panel-' + panel).classList.add('active');
+    if (panel === 'dashboard') { loadDashboard(); }
+    if (panel === 'upload') { loadFileList(); }
+    if (panel === 'cache') { loadCacheList(); }
+  });
+});
+
+// ===== Search =====
+document.getElementById('search-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { doSearch(); }
+});
+
+function closeSearch() {
+  document.getElementById('search-panel').classList.remove('active');
+  document.getElementById('search-list').innerHTML = '';
+  document.getElementById('search-stats').innerHTML = '';
+}
+
+function doSearch() {
+  var input = document.getElementById('search-input');
+  var query = input.value.trim();
+  if (!query) { closeSearch(); return; }
+
+  var panel = document.getElementById('search-panel');
+  var listEl = document.getElementById('search-list');
+  var statsEl = document.getElementById('search-stats');
+
+  panel.classList.add('active');
+  listEl.innerHTML = '<div class="loading">搜索中...</div>';
+  statsEl.innerHTML = '';
+
+  fetch('/api/rag/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: query, top_k: 10 })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.results || d.results.length === 0) {
+        statsEl.innerHTML = '未找到相关内容';
+        listEl.innerHTML = '<div class="no-results">' +
+          '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
+          '<p>未找到相关内容</p><p class="sub">尝试其他关键词或确认文档已索引</p></div>';
+        return;
+      }
+      var info = '找到 ' + d.results.length + ' 条结果';
+      if (d.stats) { info += ' &middot; BM25: ' + d.stats.bm25_hits + ' &middot; 向量: ' + d.stats.dense_hits; }
+      statsEl.innerHTML = info;
+
+      var html = '';
+      d.results.forEach(function(r) {
+        var scorePct = Math.min(100, Math.round(r.score * 100));
+        var docName = r.doc_id.split('::')[0] || r.doc_id;
+        html += '<div class="result-card" data-doc="' + escapeAttr(docName) + '" data-chunk="' + escapeAttr(r.chunk) + '" onclick="openDetail(this)">' +
+          '<div class="r-header"><span class="r-docid">' + escapeHtml(docName) + '</span>' +
+          '<div class="r-score-wrap"><div class="r-score-bar"><div class="r-score-fill" style="width:' + scorePct + '%"></div></div>' +
+          '<span class="r-score-val">' + r.score.toFixed(3) + '</span></div></div>' +
+          '<div class="r-chunk">' + escapeHtml(r.chunk) + '</div></div>';
+      });
+      listEl.innerHTML = html;
+    })
+    .catch(function(e) {
+      statsEl.innerHTML = '';
+      listEl.innerHTML = '<div class="no-results"><p style="color:#f85149">搜索失败: ' + e.message + '</p>' +
+        '<p class="sub">请确认 RAG 索引器已正常启动</p></div>';
+    });
+}
+
+// ===== File Upload =====
+var dropZone = document.getElementById('drop-zone');
+dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('dragover'); });
+dropZone.addEventListener('drop', function(e) {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  handleFileSelect(e.dataTransfer.files);
+});
+
+document.getElementById('file-input').addEventListener('change', function() {
+  handleFileSelect(this.files);
+});
+
+function handleFileSelect(files) {
+  if (!files || files.length === 0) { return; }
+  var fileArray = Array.from ? Array.from(files) : Array.prototype.slice.call(files);
+  fileArray.forEach(function(f) { uploadFile(f); });
+}
+
+function uploadFile(file) {
+  var progressEl = document.getElementById('upload-progress');
+  var fillEl = document.getElementById('progress-fill');
+  var labelEl = document.getElementById('progress-label');
+  var statusEl = document.getElementById('upload-status');
+
+  progressEl.classList.add('active');
+  labelEl.textContent = file.name;
+  fillEl.style.width = '15%';
+
+  var form = new FormData();
+  form.append('file', file);
+
+  var progInterval = setInterval(function() {
+    var w = parseInt(fillEl.style.width) || 0;
+    if (w < 85) { fillEl.style.width = (w + 12) + '%'; }
+  }, 200);
+
+  fetch('/api/upload', { method: 'POST', body: form })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      clearInterval(progInterval);
+      fillEl.style.width = '100%';
+      setTimeout(function() { progressEl.classList.remove('active'); }, 500);
+
+      if (d.success) {
+        var cls = 'success';
+        var icon = '';
+        if (d.index_status === 'indexed') { icon = '\u2705 '; }
+        else if (d.index_status === 'stored_only') { icon = '\u26A0\uFE0F '; cls = 'info'; }
+        else if (d.index_status === 'index_error') { icon = '\u274C '; cls = 'error'; }
+
+        var msg = icon + escapeHtml(d.filename) + ' (' + formatSize(d.size) + ')';
+        if (d.index_status === 'indexed') { msg += ' \u2014 已索引 ' + d.chunk_count + ' 块'; }
+        else if (d.index_status === 'stored_only') { msg += ' \u2014 仅存储'; }
+        else if (d.index_status === 'index_error') { msg += ' \u2014 索引失败'; }
+
+        appendStatus(msg, cls);
+        loadFileList();
+      } else if (d.status === 'duplicate') {
+        appendStatus('\u26A0\uFE0F 文件重复: ' + escapeHtml(d.filename), 'error');
+      } else {
+        appendStatus('\u274C 上传失败: ' + escapeHtml(d.filename), 'error');
+      }
+    })
+    .catch(function(e) {
+      clearInterval(progInterval);
+      progressEl.classList.remove('active');
+      appendStatus('\u274C 上传错误: ' + e.message, 'error');
+    });
+}
+
+function appendStatus(msg, cls) {
+  var el = document.getElementById('upload-status');
+  var div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.textContent = msg;
+  el.prepend(div);
+  setTimeout(function() { if (div.parentNode) { div.remove(); } }, 5000);
+}
+
+// ===== File List =====
+function typeIcon(ext) {
+  var e = ext.toLowerCase();
+  if (e === 'pdf') { return '\uD83D\uDCD5'; }
+  if (e === 'docx' || e === 'doc') { return '\uD83D\uDCC4'; }
+  if (e === 'md') { return '\uD83D\uDCDD'; }
+  if (e === 'txt') { return '\uD83D\uDCC4'; }
+  if (e === 'csv' || e === 'xlsx' || e === 'xls') { return '\uD83D\uDCCA'; }
+  return '\uD83D\uDCC4';
+}
+
+function indexStatusTag(s) {
+  var labels = { indexed: '已索引', stored_only: '仅存储', duplicate: '重复', index_error: '索引失败' };
+  var css = { indexed: 'indexed', stored_only: 'stored_only', duplicate: 'duplicate', index_error: 'index_error' };
+  return '<span class="stag ' + (css[s] || '') + '">' + (labels[s] || s) + '</span>';
+}
+
+function loadFileList() {
+  var el = document.getElementById('file-list-content');
+  var badge = document.getElementById('file-count-badge');
+  fetch('/api/files')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.files || d.files.length === 0) {
+        badge.textContent = '0 个文件';
+        el.innerHTML = '<div class="empty-state">' +
+          '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z"/></svg>' +
+          '<p>暂无上传文件</p><p class="sub">拖拽或点击左侧区域开始上传</p></div>';
+        return;
+      }
+      badge.textContent = d.files.length + ' 个文件';
+      var html = '<table class="file-table"><thead><tr><th>文件名</th><th>类型</th><th>状态</th><th>大小</th><th>时间</th><th style="width:40px"></th></tr></thead><tbody>';
+      d.files.forEach(function(f) {
+        var ext = (f.filename.split('.').pop() || '').toUpperCase();
+        var ico = typeIcon(ext);
+        html += '<tr id="row-' + encodeURIComponent(f.filename) + '">' +
+          '<td><div class="fname"><span class="ficon">' + ico + '</span>' + escapeHtml(f.filename) + '</div></td>' +
+          '<td><span class="stag type-td">' + ext + '</span></td>' +
+          '<td>' + indexStatusTag(f.index_status) + '</td>' +
+          '<td class="size">' + formatSize(f.size) + '</td>' +
+          '<td class="time">' + f.modified.substring(0, 16).replace('T', ' ') + '</td>' +
+          '<td><button class="btn-del" title="删除" data-filename="' + escapeAttr(f.filename) + '">&times;</button></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      el.innerHTML = html;
+
+      el.querySelectorAll('.btn-del').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          deleteFile(btn.dataset.filename);
+        });
+      });
+    })
+    .catch(function(_e) {
+      badge.textContent = '错误';
+      el.innerHTML = '<p style="color:#f85149;padding:20px">加载文件列表失败</p>';
+    });
+}
+
+// ===== Delete File =====
+function deleteFile(filename) {
+  var overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = '<div class="confirm-box">' +
+    '<h4>确认删除</h4>' +
+    '<div class="confirm-msg">将删除文件 <strong>' + escapeHtml(filename) + '</strong></div>' +
+    '<div class="confirm-hint">此操作将移除源文件及索引，不可撤销。</div>' +
+    '<div class="confirm-btns">' +
+      '<button class="btn-cancel" id="btn-cancel-del">取消</button>' +
+      '<button class="btn-confirm" id="btn-confirm-del">确认删除</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+
+  function closeOverlay() { if (overlay.parentNode) overlay.remove(); }
+
+  document.getElementById('btn-cancel-del').addEventListener('click', closeOverlay);
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) closeOverlay(); });
+
+  document.getElementById('btn-confirm-del').addEventListener('click', function() {
+    closeOverlay();
+    var fnameEnc = encodeURIComponent(filename);
+    var row = document.getElementById('row-' + fnameEnc);
+    if (row) { row.style.opacity = '0.4'; }
+
+    fetch('/api/files/' + encodeURIComponent(filename), { method: 'DELETE' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.success) {
+          if (row) {
+            row.style.transition = 'opacity .3s, transform .3s';
+            row.style.opacity = '0';
+            row.style.transform = 'translateX(-8px)';
+            setTimeout(function() {
+              if (row.parentNode) { row.remove(); updateFileCount(); }
+            }, 300);
+          }
+          showToast('\u2713 已删除: ' + escapeHtml(filename), 'success');
+        } else {
+          if (row) row.style.opacity = '1';
+          showToast('\u274C 删除失败', 'error');
+        }
+      })
+      .catch(function(e) {
+        if (row) row.style.opacity = '1';
+        showToast('\u274C 删除错误: ' + e.message, 'error');
+      });
+  });
+}
+
+function updateFileCount() {
+  var tbody = document.querySelector('.file-table tbody');
+  var badge = document.getElementById('file-count-badge');
+  if (!tbody) { loadFileList(); return; }
+  var count = tbody.querySelectorAll('tr').length;
+  badge.textContent = count + ' 个文件';
+  if (count === 0) { loadFileList(); }
+}
+
+function showToast(msg, cls) {
+  var el = document.createElement('div');
+  el.className = 'toast ' + cls;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(function() {
+    el.style.opacity = '0';
+    el.style.transition = 'opacity .3s';
+    setTimeout(function() { if (el.parentNode) { el.remove(); } }, 300);
+  }, 3000);
+}
+
+// ===== Dashboard =====
+function loadDashboard() {
+  fetch('/api/dashboard')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('s-total').textContent = d.workflows.total_runs;
+      document.getElementById('s-rate').textContent = (d.workflows.success_rate * 100).toFixed(1) + '%';
+      document.getElementById('s-cpu').textContent = d.system.cpu_percent.toFixed(1) + '%';
+      document.getElementById('s-mem').textContent = d.system.memory_percent.toFixed(1) + '%';
+      document.getElementById('s-mem-sub').textContent = d.system.memory_used_gb + ' / ' + d.system.memory_total_gb + ' GB';
+
+      var ahtml = '';
+      d.agents.forEach(function(a) {
+        ahtml += '<div class="agent-card">' +
+          '<div class="agent-header"><span class="agent-name"><span class="status-dot"></span>' + escapeHtml(a.name) + '</span></div>' +
+          '<div class="metrics">' +
+            '<div class="metric"><div class="m-label">已完成任务</div><div class="m-value">' + a.tasks_completed + '</div></div>' +
+            '<div class="metric"><div class="m-label">平均响应</div><div class="m-value">' + a.avg_response_ms + 'ms</div></div>' +
+          '</div></div>';
+      });
+      document.getElementById('agents-grid').innerHTML = ahtml;
+
+      var lhtml = '';
+      d.recent_logs.forEach(function(log) {
+        lhtml += '<div class="log-entry">' +
+          '<span class="log-time">' + log.time.substring(11, 19) + '</span>' +
+          '<span class="log-level ' + log.level + '">' + log.level + '</span>' +
+          '<span class="log-agent">' + escapeHtml(log.agent) + '</span>' +
+          '<span class="log-msg">' + escapeHtml(log.message) + '</span></div>';
+      });
+      document.getElementById('log-content').innerHTML = lhtml;
+    })
+    .catch(function(_e) {
+      document.getElementById('log-content').innerHTML = '<p style="color:#f85149">加载仪表盘失败</p>';
+    });
+}
+
+// ===== Utilities =====
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(2) + ' MB';
+}
+
+function escapeHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function escapeAttr(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ===== Detail Modal =====
+function openDetail(el) {
+  var doc = el.getAttribute('data-doc');
+  var chunk = el.getAttribute('data-chunk');
+  document.getElementById('detail-title').textContent = doc;
+  document.getElementById('detail-body').textContent = chunk;
+  document.getElementById('detail-overlay').classList.add('active');
+}
+function closeDetail() {
+  document.getElementById('detail-overlay').classList.remove('active');
+}
+
+// ===== Semantic Cache =====
+var cacheData = [];
+var cacheDomainFilter = '';
+
+function loadCacheList() {
+  var loadingEl = document.getElementById('cache-loading');
+  var emptyEl = document.getElementById('cache-empty');
+  var domainsEl = document.getElementById('cache-domains');
+  var listEl = document.getElementById('cache-list');
+  var countEl = document.getElementById('cache-total-count');
+
+  loadingEl.style.display = 'block';
+  emptyEl.style.display = 'none';
+  domainsEl.style.display = 'none';
+  listEl.innerHTML = '';
+
+  fetch('/api/cache/list')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      loadingEl.style.display = 'none';
+      cacheData = d.entries || [];
+      countEl.textContent = cacheData.length + ' 条';
+      document.getElementById('s-cache').textContent = cacheData.length;
+      cacheDomainFilter = '';
+
+      if (cacheData.length === 0) {
+        emptyEl.style.display = 'flex';
+        document.getElementById('s-cache').textContent = '0';
+        return;
+      }
+
+      // build domain cards
+      var domainMap = {};
+      var labels = {general:'通用问答',finance:'金融',contract:'合同',law:'法律',legal:'法律',policy:'制度',tech:'技术'};
+      var icons = {general:'💬',finance:'📊',contract:'📋',law:'⚖️',legal:'⚖️',policy:'📝',tech:'💻'};
+      var dmColors = {finance:'#ff6b6b',contract:'#fab005',law:'#a5b4fc',legal:'#a5b4fc',general:'#8b949e',policy:'#7c3aed',tech:'#06b6d4'};
+      for (var i = 0; i < cacheData.length; i++) {
+        var dm = cacheData[i].domain || 'general';
+        domainMap[dm] = (domainMap[dm] || 0) + 1;
+      }
+      var cards = '';
+      var keys = Object.keys(domainMap).sort();
+      for (var k = 0; k < keys.length; k++) {
+        var dk = keys[k];
+        var activeClass = (cacheDomainFilter === dk) ? ' active' : '';
+        cards += '<div class="cache-domain-card' + activeClass + '" data-domain="' + dk + '" onclick="filterCacheDomain(\'' + dk + '\')">' +
+          '<div class="dc-icon" style="background:' + (dmColors[dk]||'#30363d') + '1a">' + (icons[dk]||'📄') + '</div>' +
+          '<div class="dc-body">' +
+            '<span class="dc-label">' + (labels[dk]||dk) + '</span>' +
+            '<span class="dc-count">' + domainMap[dk] + ' 条缓存</span>' +
+          '</div>' +
+          '<button class="dc-del" title="删除「' + (labels[dk]||dk) + '」分类全部缓存" onclick="event.stopPropagation();clearDomainCache(\'' + dk + '\')">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
+          '</button>' +
+        '</div>';
+      }
+      domainsEl.innerHTML = cards;
+      domainsEl.style.display = 'flex';
+
+      renderCacheEntries();
+    })
+    .catch(function(e) {
+      loadingEl.style.display = 'none';
+      listEl.innerHTML = '<div class="cache-error">加载失败: ' + e.message + '</div>';
+    });
+}
+
+function filterCacheDomain(domain) {
+  cacheDomainFilter = (cacheDomainFilter === domain) ? '' : domain;
+  var cards = document.querySelectorAll('.cache-domain-card');
+  for (var i = 0; i < cards.length; i++) {
+    cards[i].classList.toggle('active', cards[i].dataset.domain === cacheDomainFilter);
+  }
+  renderCacheEntries();
+}
+
+function renderCacheEntries() {
+  var listEl = document.getElementById('cache-list');
+  var filtered = cacheDomainFilter ? cacheData.filter(function(e) { return e.domain === cacheDomainFilter; }) : cacheData;
+  if (filtered.length === 0) {
+    listEl.innerHTML = '<div class="cache-no-match">该分类下无缓存条目</div>';
+    return;
+  }
+  var dmLabels = {general:'通用',finance:'金融',contract:'合同',law:'法律',legal:'法律',policy:'制度',tech:'技术'};
+  var html = '';
+  for (var i = 0; i < filtered.length; i++) {
+    var entry = filtered[i];
+    var q = entry.question || '';
+    if (q.length > 60) q = q.slice(0, 60) + '...';
+    var dm = entry.domain || 'general';
+    var dmClass = 'cache-domain-badge dm-' + dm;
+    var dmLabel = dmLabels[dm] || dm;
+    var tags = '<span class="' + dmClass + '">' + dmLabel + '</span>';
+    var files = entry.source_files || [];
+    for (var j = 0; j < Math.min(files.length, 2); j++) {
+      var fn = files[j].split('/').pop();
+      tags += '<span class="cache-src-tag">' + fn + '</span>';
+    }
+    if (files.length > 2) tags += '<span class="cache-src-more">+' + (files.length - 2) + '</span>';
+    var timeStr = '';
+    if (entry.indexed_at && entry.indexed_at > 0) {
+      var d = new Date(entry.indexed_at * 1000);
+      timeStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    }
+    html += '<div class="cache-row">' +
+      '<div class="cache-row-body">' +
+        '<div class="cache-row-q" title="' + (entry.question||'').replace(/"/g,'&quot;') + '">' + q + '</div>' +
+        '<div class="cache-row-meta">' + tags + '<span class="cache-row-time">' + timeStr + '</span></div>' +
+      '</div>' +
+      '<button class="cache-row-del" title="删除此缓存" onclick="deleteCache(' + entry.id + ')">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
+      '</button>' +
+    '</div>';
+  }
+  listEl.innerHTML = html;
+}
+
+function deleteCache(id) {
+  if (!confirm('确定删除此缓存条目？')) return;
+  fetch('/api/cache/entry/' + id, { method: 'DELETE' })
+    .then(function(r) {
+      if (r.ok) {
+        cacheData = cacheData.filter(function(e) { return e.id !== id; });
+        document.getElementById('cache-total-count').textContent = cacheData.length + ' 条';
+        document.getElementById('s-cache').textContent = cacheData.length;
+        if (cacheData.length === 0) {
+          document.getElementById('cache-empty').style.display = 'flex';
+          document.getElementById('cache-domains').style.display = 'none';
+          document.getElementById('cache-list').innerHTML = '';
+        } else {
+          renderCacheEntries();
+          // rebuild domain chips
+          loadCacheList();
+        }
+      } else {
+        alert('删除失败');
+      }
+    })
+    .catch(function(e) { alert('删除失败: ' + e.message); });
+}
+
+function clearAllCache() {
+  if (!confirm('确定要清空全部语义缓存？此操作不可恢复。')) return;
+  fetch('/api/cache/clear', { method: 'DELETE' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      alert('已清空 ' + d.cleared + ' 条缓存');
+      loadCacheList();
+    })
+    .catch(function(e) { alert('清空失败: ' + e.message); });
+}
+
+function clearDomainCache(domain) {
+  var labels = {general:'通用问答',finance:'金融',contract:'合同',law:'法律',legal:'法律',policy:'制度',tech:'技术'};
+  var label = labels[domain] || domain;
+  if (!confirm('确定要删除「' + label + '」分类的全部缓存？此操作不可恢复。')) return;
+  fetch('/api/cache/domain/' + encodeURIComponent(domain), { method: 'DELETE' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      alert('已删除「' + label + '」分类 ' + d.removed + ' 条缓存');
+      loadCacheList();
+    })
+    .catch(function(e) { alert('删除失败: ' + e.message); });
+}
+
+// ===== Stats Bar =====
+function loadStatsBar() {
+  // 当前会话
+  fetch('/api/conversations')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('s-conversations').textContent = (d.conversations || []).length;
+    })
+    .catch(function() { document.getElementById('s-conversations').textContent = '0'; });
+
+  // 知识库统计
+  fetch('/api/files')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var s = d.stats || {};
+      document.getElementById('s-kb-files').textContent = s.file_count || 0;
+      document.getElementById('s-kb-chunks').textContent = s.chunk_count || 0;
+    })
+    .catch(function() {
+      document.getElementById('s-kb-files').textContent = '0';
+      document.getElementById('s-kb-chunks').textContent = '0';
+    });
+
+  // 轨迹事件
+  fetch('/api/logs?limit=100')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var logs = d.logs || d || [];
+      document.getElementById('s-logs').textContent = Array.isArray(logs) ? logs.length : 0;
+    })
+    .catch(function() { document.getElementById('s-logs').textContent = '0'; });
+
+  // 语义缓存
+  fetch('/api/cache/list')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('s-cache').textContent = d.total || 0;
+    })
+    .catch(function() { document.getElementById('s-cache').textContent = '0'; });
+}
+
+// ===== Switch to Cache Tab =====
+function switchToCacheTab() {
+  var cacheTab = document.querySelector('.tab[data-panel="cache"]');
+  if (cacheTab) { cacheTab.click(); }
+}
+
+// ===== Init =====
+loadFileList();
+loadStatsBar();
+</script>
+<!-- Detail Modal -->
+<div class="detail-overlay" id="detail-overlay" onclick="if(event.target===this)closeDetail()">
+  <div class="detail-box">
+    <div class="dt-header">
+      <span class="dt-title" id="detail-title"></span>
+      <button class="dt-close" onclick="closeDetail()">&times;</button>
+    </div>
+    <div class="dt-body" id="detail-body"></div>
+  </div>
+</div>
+
+</body>
+</html>
