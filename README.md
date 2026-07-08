@@ -38,7 +38,6 @@ curl http://localhost:8000/health
 | POST | /chat | 通用对话入口 |
 | POST | /analyze | 数据分析 |
 | POST | /research | 研究查询 |
-| POST | /customer | 客服对话 |
 | GET | /health | 健康检查 |
 
 ## 项目结构
