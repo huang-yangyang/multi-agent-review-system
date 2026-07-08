@@ -2,13 +2,13 @@
   <div class="dashboard">
     <div class="dashboard-grid">
       <!-- 左：对话列表 -->
-      <aside class="panel panel-left">
+      <aside class="panel panel-left" v-reveal="'left'">
         <div class="panel-header">
           <span class="panel-title">
             <el-icon :size="16" color="var(--secondary)"><ChatDotRound /></el-icon>
             对话历史
           </span>
-          <button class="new-btn" @click="createConversation()">
+          <button class="new-btn" v-magnetic @click="createConversation()">
             <el-icon :size="13"><Plus /></el-icon> 新对话
           </button>
         </div>
@@ -92,7 +92,7 @@
       </aside>
 
       <!-- 中：对话区 -->
-      <section class="panel panel-center">
+      <section class="panel panel-center" v-reveal>
         <ChatInterface
           :messages="chatMessages"
           :loading="running && !interruptState"
@@ -102,7 +102,7 @@
       </section>
 
       <!-- 右：执行日志时间轴 -->
-      <aside class="panel panel-right" v-if="chatMessages.length || logs.length">
+      <aside class="panel panel-right" v-if="chatMessages.length || logs.length" v-reveal="'left'">
         <div class="panel-header">
           <span class="panel-title">
             <el-icon :size="16" color="var(--secondary)"><Monitor /></el-icon>
@@ -754,6 +754,11 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: border-color .3s var(--ease), box-shadow .3s var(--ease);
+}
+.panel:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
 }
 .panel-header {
   display: flex; align-items: center; justify-content: space-between;

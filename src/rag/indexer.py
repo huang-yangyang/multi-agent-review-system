@@ -42,8 +42,8 @@ class Indexer:
 
         self.db_path = self.indexes_dir / "indexes.db"
         self.bm25_path = self.indexes_dir / "bm25.pkl"
-        self.faiss_index_path = self.indexes_dir / "faiss.index"
-        self.faiss_meta_path = self.indexes_dir / "faiss_meta.json"
+        # D 方案：稠密向量改用 Qdrant 本地模式（磁盘存储），不再用文件型 FAISS
+        self.qdrant_path = self.indexes_dir / "qdrant_storage"
 
         self._lock = threading.Lock()
 
@@ -51,9 +51,9 @@ class Indexer:
         self.embedder = Embedder()
         self.dim = self.embedder.dim
 
-        # 双路索引
+        # 双路索引：BM25（词法，文件型）+ Qdrant（稠密，带元数据 pre-filter）
         self.bm25 = BM25Index()
-        self.dense = DenseIndex(dim=self.dim)
+        self.dense = DenseIndex(dim=self.dim, storage_path=str(self.qdrant_path))
 
         # 精排器
         self.reranker = Reranker()
@@ -112,12 +112,9 @@ class Indexer:
             except Exception as e:
                 logger.warning(f"BM25 索引恢复失败: {e}")
 
-        if self.faiss_index_path.exists() and self.faiss_meta_path.exists():
-            try:
-                self.dense = DenseIndex.load(str(self.faiss_index_path), str(self.faiss_meta_path))
-                logger.info("FAISS 索引已恢复")
-            except Exception as e:
-                logger.warning(f"FAISS 索引恢复失败: {e}")
+        # 稠密向量由 Qdrant 本地引擎管理，启动时自动从 qdrant_storage 恢复，
+        # 无需手动加载文件（D 方案：元数据 pre-filter 向量库）。
+        logger.info("Qdrant 稠密索引随客户端启动自动恢复")
 
         # 从 SQLite 重建领域映射
         try:
@@ -136,7 +133,7 @@ class Indexer:
 
     def _persist(self):
         self.bm25.save(str(self.bm25_path))
-        self.dense.save(str(self.faiss_index_path), str(self.faiss_meta_path))
+        # 稠密向量由 Qdrant 本地引擎自动持久化到 qdrant_storage，无需手动保存
         logger.info("索引已持久化")
 
     def _compute_hash(self, file_path: str) -> str:
@@ -170,11 +167,16 @@ class Indexer:
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
         try:
-            text = parse_document(file_path)
+            parsed = parse_document(file_path)
         except Exception as e:
             raise RuntimeError(f"文档解析失败: {e}")
 
-        is_md = path.suffix.lower() == ".md"
+        # parse_document 返回 (text, is_markdown) 元组
+        if isinstance(parsed, tuple):
+            text, parsed_is_md = parsed
+        else:
+            text, parsed_is_md = parsed, path.suffix.lower() == ".md"
+        is_md = parsed_is_md
         chunks = chunk_text(text, is_markdown=is_md)
 
         if not chunks:
@@ -184,6 +186,14 @@ class Indexer:
         doc_prefix = f"{path.name}::{self._compute_hash(file_path)}"
         doc_ids = [f"{doc_prefix}::{i}" for i in range(len(chunks))]
         file_names = [path.name] * len(chunks)
+        doc_paths = [str(path)] * len(chunks)
+
+        # 读取该文档在权限模型中的可见性，写入 Qdrant payload 以支持 pre-filter
+        try:
+            from src.permissions import get_doc_visibility
+            visibility = get_doc_visibility(str(path))
+        except Exception:
+            visibility = "admin"
 
         with self._lock:
 
@@ -193,7 +203,15 @@ class Indexer:
                 raise RuntimeError(f"Embedding 生成失败: {e}")
 
             self.bm25.add(chunks, file_names, doc_ids)
-            self.dense.add(vectors, chunks, file_names, doc_ids)
+            self.dense.add(
+                vectors,
+                chunks,
+                file_names,
+                doc_ids,
+                doc_paths=doc_paths,
+                visibility=visibility,
+                domain=domain,
+            )
 
             # 写入 chunks 表
             with sqlite3.connect(str(self.db_path)) as conn:
@@ -268,6 +286,13 @@ class Indexer:
         prefix = "::".join(doc_id.split("::")[:2])
         return self._doc_domain_map.get(prefix, "general")
 
+    def _file_path_for_chunk(self, doc_id: str) -> str:
+        """从 doc_id 提取文件名（basename）。
+
+        doc_id 格式: {file_name}::{file_hash}::{chunk_index}
+        """
+        return doc_id.split("::")[0] if "::" in doc_id else doc_id
+
     def _filter_by_domain(
         self,
         candidates: List[Dict[str, Any]],
@@ -291,6 +316,7 @@ class Indexer:
         query: str,
         top_k: int = 10,
         domain: Optional[str] = None,
+        accessible_paths: Optional[set] = None,
     ) -> dict:
         with self._lock:
             bm25_candidates_raw = self.bm25.search(query, top_k=20)
@@ -300,7 +326,15 @@ class Indexer:
             ]
 
             query_vec = self.embedder.encode_single(query)
-            dense_candidates_raw = self.dense.search(query_vec, top_k=20)
+            # ── D 方案：稠密检索 pre-filter ──
+            # 直接在 Qdrant 层按 accessible_paths + domain 过滤后再取 top_k，
+            # 避免「先取 top_k 再剔权限」在大体量下导致 RRF=0 召回空洞。
+            dense_candidates_raw = self.dense.search(
+                query_vec,
+                top_k=20,
+                accessible_paths=accessible_paths,
+                domain=domain,
+            )
             dense_candidates = [
                 {"id": doc_id, "chunk": chunk, "score": float(score)}
                 for doc_id, chunk, score in dense_candidates_raw
@@ -311,6 +345,22 @@ class Indexer:
             dense_candidates = self._filter_by_domain(dense_candidates, domain)
             bm25_candidates = self._filter_by_domain(bm25_candidates, domain)
             logger.debug(f"领域过滤后: dense={len(dense_candidates)}, bm25={len(bm25_candidates)}")
+
+        # ── 权限后过滤（post-filter）：剔除不在可访问集合的块 ──
+        if accessible_paths is not None:
+            accessible_names = {os.path.basename(p) for p in accessible_paths}
+            accessible_full = {p for p in accessible_paths}
+            dense_candidates = [
+                c for c in dense_candidates
+                if self._file_path_for_chunk(c["id"]) in accessible_names
+                or self._file_path_for_chunk(c["id"]) in accessible_full
+            ]
+            bm25_candidates = [
+                c for c in bm25_candidates
+                if self._file_path_for_chunk(c["id"]) in accessible_names
+                or self._file_path_for_chunk(c["id"]) in accessible_full
+            ]
+            logger.debug(f"权限过滤后: dense={len(dense_candidates)}, bm25={len(bm25_candidates)}")
 
         # RRF 融合
         fused = rrf_fuse(dense_candidates, bm25_candidates, k=RRF_K)
@@ -383,7 +433,7 @@ class Indexer:
             "chunk_count": chunk_count,
             "total_size_bytes": total_size,
             "bm25_docs": len(self.bm25._chunks),
-            "dense_docs": self.dense._index.ntotal if self.dense._index else 0,
+            "dense_docs": self.dense.count(),
             "domains": domain_counts,
         }
 

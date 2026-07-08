@@ -22,6 +22,7 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
     question: str
     raw_input: str
+    user_name: str           # 当前用户名，用于文档权限过滤
 
     # --- Orchestration ---
     intent: str                    # "research" | "analysis"

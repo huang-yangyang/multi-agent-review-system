@@ -6,6 +6,7 @@ Uses:
 - LLM synthesis: condenses retrieved chunks into concise, readable answers
 """
 
+import asyncio
 import json
 import traceback
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -68,7 +69,8 @@ class ResearchAgent(BaseAgent):
             # Phase 1: Internal knowledge base search (skip if pre-context covers it)
             kb_texts = list(pre_texts)  # start with orchestrator's context
             if not kb_texts:
-                kb_texts = await self._search_internal_texts(question, trace_id)
+                user_name = state.get("user_name", "")
+                kb_texts = await self._search_internal_texts(question, trace_id, user_name=user_name)
 
             # Phase 2: External web search
             web_texts = self._search_external_texts(question, trace_id)
@@ -160,7 +162,15 @@ class ResearchAgent(BaseAgent):
             "- kb_search_tool: 搜索本地知识库（优先使用）\n"
             "- web_search_tool: 联网搜索最新信息\n"
             "- calculate_tool: 计算数学表达式\n\n"
-            "策略：先搜知识库，结果不够再联网。"
+            "策略：先搜知识库，结果不够再联网。\n\n"
+            "【来源标注规则 — 必须准确标注实际来源】\n"
+            "回答时必须标注内容来源：\n"
+            "📄 文档来源 — 仅当内容来自 kb_search_tool 检索到的知识库原文时使用\n"
+            "🌐 联网搜索 — 仅当内容来自 web_search_tool 的网络搜索结果时使用\n"
+            "禁止将网络搜索的内容标注为「📄 文档来源」\n"
+            "如果知识库有相关内容，以「📄 文档来源」开头输出原文，末尾加：\n"
+            "「📌 以上为知识库已有内容。如需联网搜索或AI补充，请回复\"需要补充\"。」\n"
+            "如果知识库无内容但网络搜索有结果，以「🌐 联网搜索」开头输出。"
         )
 
         user_content = f"问题：{question}"
@@ -225,27 +235,43 @@ class ResearchAgent(BaseAgent):
             )
             return await self.act(state)
 
-    async def _search_internal_texts(self, question: str, trace_id: str = "") -> List[str]:
-        """Search internal KB and return raw chunk texts."""
+    async def _search_internal_texts(self, question: str, trace_id: str = "", user_name: str = "", return_docs: bool = False):
+        """Search internal KB and return raw chunk texts.
+
+        Args:
+            return_docs: If True, returns (texts, doc_basenames) tuple.
+                         doc_basenames is the list of referenced document names (for cache permission filtering).
+        """
         texts: List[str] = []
+        doc_names: List[str] = []
         try:
-            raw = knowledge_search(question, top_k=5)
+            raw = await asyncio.to_thread(
+                knowledge_search, question, top_k=10, user_name=user_name
+            )
             result = json.loads(raw)
+            # knowledge_search 已通过 user_name 参数完成权限过滤，无需二次过滤
 
             if not result.get("found") or not result.get("results"):
                 logger.info(
                     "ResearchAgent: internal search returned no results",
                     extra={"component": "research_agent", "agent_id": self.agent_id, "trace_id": trace_id},
                 )
-                return texts
+                return (texts, doc_names) if return_docs else texts
 
+            seen_docs = set()
             for r in result.get("results", []):
                 text = r.get("text", "")
                 if text:
                     texts.append(text)
+                doc_id = r.get("doc_id", "")
+                if doc_id and "::" in doc_id:
+                    basename = doc_id.split("::")[0]
+                    if basename not in seen_docs:
+                        seen_docs.add(basename)
+                        doc_names.append(basename)
 
             logger.info(
-                f"ResearchAgent: internal search found {len(texts)} chunks",
+                f"ResearchAgent: internal search found {len(texts)} chunks, {len(doc_names)} docs",
                 extra={"component": "research_agent", "agent_id": self.agent_id, "trace_id": trace_id},
             )
         except SearchError:
@@ -261,7 +287,7 @@ class ResearchAgent(BaseAgent):
                 detail={"agent_id": self.agent_id, "query": question[:200]},
             ) from e
 
-        return texts
+        return (texts, doc_names) if return_docs else texts
 
     def _search_external_texts(self, question: str, trace_id: str = "") -> List[str]:
         """Search external web and return snippet texts."""
@@ -326,8 +352,7 @@ class ResearchAgent(BaseAgent):
             context_parts.append("【内部知识库内容】")
             for i, t in enumerate(kb_texts, 1):
                 context_parts.append(f"[{i}] {t}")
-        else:
-            context_parts.append("【内部知识库】未找到相关内容。")
+        # KB 为空时不显示 KB 区域，避免 LLM 误标「📄 文档来源」
 
         if web_texts:
             context_parts.append("\n【外部网络搜索结果】")
@@ -341,26 +366,29 @@ class ResearchAgent(BaseAgent):
             "你是一个知识整理助手。请根据提供的参考资料回答用户的问题。\n"
             "要求：\n"
             "1. 严格基于参考资料回答，不要编造信息\n"
-            "2. 优先使用内部知识库的内容\n"
-            "3. 按原文的标题层级组织答案：\n"
+            "2. 按原文的标题层级组织答案：\n"
             "   - 如果用户询问某个三级标题，列出该标题下的四级、五级标题及其完整原文内容\n"
             "   - 如果用户询问某个二级标题，列出该标题下的三级、四级标题及其完整原文内容\n"
             "   - 以此类推，按标题层级归类输出\n"
-            "4. 已检索到的原文内容需完整输出，不要精简、省略或用自己的话改写\n"
-            "5. 如果参考资料中完全没有答案，诚实告知\n"
-            "6. 【分层输出规则 — 最高优先级，必须遵守】\n"
-            "   第一层（默认输出）：只输出「📄 文档来源」分区的内容——即内部知识库中检索到的原文。\n"
-            "   - 如果知识库有相关内容：按标题层级整理输出，末尾追加一句：\n"
+            "3. 已检索到的原文内容需完整输出，不要精简、省略或用自己的话改写\n"
+            "4. 如果参考资料中完全没有答案，诚实告知\n"
+            "5. 【来源标注规则 — 必须准确标注实际来源】\n"
+            "   根据参考资料的实际来源使用以下标记：\n"
+            "   📄 文档来源 — 仅当参考资料中包含【内部知识库内容】区域且有实际文本时使用此标记\n"
+            "   🌐 联网搜索 — 当参考资料中只有【外部网络搜索结果】区域时必须使用此标记\n"
+            "   ⚠️ 判断规则：如果参考资料中没有【内部知识库内容】区域，说明知识库无相关内容，必须使用「🌐 联网搜索」\n"
+            "   如果内部知识库有内容，以「📄 文档来源」开头输出知识库原文\n"
+            "   如果内部知识库无内容但网络搜索有结果，以「🌐 联网搜索」开头输出网络搜索结果\n"
+            "   禁止将网络搜索的内容标注为「📄 文档来源」\n"
+            "6. 【分层输出规则】\n"
+            "   第一层（默认输出）：输出检索到的内容（知识库优先）。\n"
+            "   - 如果参考资料包含【内部知识库内容】：按标题层级整理输出，末尾追加：\n"
             "     「📌 以上为知识库已有内容。如需联网搜索最新信息或 AI 补充通用知识，请回复\"需要补充\"。」\n"
-            "   - 如果知识库无相关内容：直接回复「知识库中未找到相关内容，建议联网搜索或上传相关文档。」\n"
+            "   - 如果参考资料不包含【内部知识库内容】但有【外部网络搜索结果】：直接输出网络搜索结果，末尾追加：\n"
+            "     「📌 以上为网络搜索结果。如需 AI 补充通用知识，请回复\"需要补充\"。」\n"
             "   第二层（仅在用户明确要求\"补充\"/\"继续\"/\"更多\"后触发）：\n"
-            "   - 输出「🌐 联网搜索」和/或「🤖 AI 补充」分区。\n"
-            "7. 【来源标注规则】\n"
-            "   使用以下显式标记区分来源：\n"
-            "   📄 文档来源 — 内部知识库\n"
-            "   🌐 联网搜索 — 外部网络（仅在用户要求后输出）\n"
-            "   🤖 AI 补充 — 通用知识（仅在用户要求后输出）\n"
-            "8. 【无附件兜底框架规则 — 必须遵守】\n"
+            "   - 输出其他来源的补充内容\n"
+            "7. 【无附件兜底框架规则 — 必须遵守】\n"
             "   当用户要求审查/分析/检查某类文档但参考资料中没有该文档的具体文本时：\n"
             "     a. 坦诚说明未收到具体文档（一句话即可）\n"
             "     b. 基于知识库立即给出一份完整的通用审查框架\n"
@@ -422,7 +450,18 @@ class ResearchAgent(BaseAgent):
         )
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
         response = await llm.ainvoke(messages)
-        return response.content.strip() if hasattr(response, "content") else str(response).strip()
+        result = response.content.strip() if hasattr(response, "content") else str(response).strip()
+        try:
+            from src.middleware import token_tracker
+            meta = getattr(response, 'response_metadata', {}) or {}
+            usage = meta.get('token_usage', {})
+            inp = usage.get('prompt_tokens', 0)
+            out = usage.get('completion_tokens', 0)
+            if inp or out:
+                token_tracker.record(inp, out, module="research_agent")
+        except Exception:
+            pass
+        return result
 
     async def _synthesize_stream(
         self, question: str, kb_texts: List[str], web_texts: List[str], trace_id: str = "",
@@ -442,8 +481,7 @@ class ResearchAgent(BaseAgent):
             context_parts.append("【内部知识库内容】")
             for i, t in enumerate(kb_texts, 1):
                 context_parts.append(f"[{i}] {t}")
-        else:
-            context_parts.append("【内部知识库】未找到相关内容。")
+        # KB 为空时不显示 KB 区域，避免 LLM 误标「📄 文档来源」
         if web_texts:
             context_parts.append("\n【外部网络搜索结果】")
             for i, t in enumerate(web_texts[:3], 1):
@@ -454,13 +492,20 @@ class ResearchAgent(BaseAgent):
             "你是一个知识整理助手。请根据提供的参考资料回答用户的问题。\n"
             "要求：\n"
             "1. 严格基于参考资料回答，不要编造信息\n"
-            "2. 优先使用内部知识库的内容\n"
-            "3. 按原文的标题层级组织答案\n"
-            "4. 已检索到的原文内容需完整输出，不要精简、省略或用自己的话改写\n"
-            "5. 如果参考资料中完全没有答案，诚实告知\n"
-            "6. 【分层输出 — 最高优先级】默认只输出 📄 文档来源。末尾加：\n"
-            "   「📌 以上为知识库已有内容。如需联网搜索或AI补充，请回复\"需要补充\"。」\n"
-            "   仅当用户明确要求后再输出 🌐 联网搜索 / 🤖 AI 补充。\n"
+            "2. 按原文的标题层级组织答案\n"
+            "3. 已检索到的原文内容需完整输出，不要精简、省略或用自己的话改写\n"
+            "4. 如果参考资料中完全没有答案，诚实告知\n"
+            "5. 【来源标注规则 — 必须准确标注实际来源】\n"
+            "   📄 文档来源 — 仅当参考资料中包含【内部知识库内容】区域且有实际文本时使用\n"
+            "   🌐 联网搜索 — 当参考资料中只有【外部网络搜索结果】区域时必须使用此标记\n"
+            "   ⚠️ 判断规则：如果参考资料中没有【内部知识库内容】区域，说明知识库无相关内容，必须使用「🌐 联网搜索」\n"
+            "   禁止将网络搜索的内容标注为「📄 文档来源」\n"
+            "6. 【分层输出】默认输出检索到的内容（知识库优先）。\n"
+            "   - 参考资料包含【内部知识库内容】时，以「📄 文档来源」开头，末尾加：\n"
+            "     「📌 以上为知识库已有内容。如需联网搜索或AI补充，请回复\"需要补充\"。」\n"
+            "   - 参考资料不包含【内部知识库内容】但包含【外部网络搜索结果】时，以「🌐 联网搜索」开头，末尾加：\n"
+            "     「📌 以上为网络搜索结果。如需AI补充，请回复\"需要补充\"。」\n"
+            "   仅当用户明确要求后再输出其他来源的补充内容。\n"
             "7. 当用户要求审查/分析某类文档但参考资料中没有该文档具体文本时，\n"
             "   一句话说明未收到文档，然后基于知识库立刻给出通用审查框架，\n"
             "   并在末尾引导用户上传文件。禁止仅回复「未提供文档」就结束。\n"

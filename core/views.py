@@ -41,25 +41,57 @@ from core.conversation_store import (
 
 logger = logging.getLogger(__name__)
 
+# 系统日志存储（注册 logging handler）
+import src.log_store as _log_store  # noqa: F401
+
+# 自动修复引擎随 Django 启动
+from src.auto_heal import get_engine
+get_engine().start()
 
 # ── Auth decorator ──
 
 def require_auth(view_func):
-    """简易 Token 鉴权。前端发送 Authorization: Bearer <base64(username)>"""
+    """简易 Token 鉴权。前端发送 Authorization: Bearer <base64(username)>。支持 async 视图。"""
     from functools import wraps
+    import inspect
+
     @wraps(view_func)
-    def _wrapped(request, *args, **kwargs):
+    async def _async_wrapped(request, *args, **kwargs):
         auth = request.META.get("HTTP_AUTHORIZATION", "")
         if auth.startswith("Bearer "):
             try:
                 username = __import__('base64').b64decode(auth[7:].encode()).decode()
                 from django.contrib.auth.models import User
                 if User.objects.filter(username=username).exists():
+                    request.user_name = username
+                    from src.log_store import log_store
+                    log_store.append("INFO", "auth", f"用户 {username} 访问 {request.path}", "")
+                    return await view_func(request, *args, **kwargs)
+            except Exception:
+                pass
+        from src.log_store import log_store
+        log_store.append("ERROR", "auth", f"未授权访问被拒绝: {request.path}", f"IP: {request.META.get('REMOTE_ADDR','unknown')}")
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
+    @wraps(view_func)
+    def _sync_wrapped(request, *args, **kwargs):
+        auth = request.META.get("HTTP_AUTHORIZATION", "")
+        if auth.startswith("Bearer "):
+            try:
+                username = __import__('base64').b64decode(auth[7:].encode()).decode()
+                from django.contrib.auth.models import User
+                if User.objects.filter(username=username).exists():
+                    request.user_name = username
+                    from src.log_store import log_store
+                    log_store.append("INFO", "auth", f"用户 {username} 访问 {request.path}", "")
                     return view_func(request, *args, **kwargs)
             except Exception:
                 pass
+        from src.log_store import log_store
+        log_store.append("ERROR", "auth", f"未授权访问被拒绝: {request.path}", f"IP: {request.META.get('REMOTE_ADDR','unknown')}")
         return JsonResponse({"error": "Unauthorized"}, status=401)
-    return _wrapped
+
+    return _async_wrapped if inspect.iscoroutinefunction(view_func) else _sync_wrapped
 
 
 # ── Paths ──
@@ -107,7 +139,7 @@ def _json_body(request: HttpRequest) -> Dict[str, Any]:
         return {}
 
 
-def _load_conversation_context(thread_id: str, max_messages: int = 10) -> list:
+def _load_conversation_context(thread_id: str, max_messages: int = 10, username: str = "") -> list:
     """加载对话历史并转换为 LangChain 消息格式。
 
     Args:
@@ -120,7 +152,7 @@ def _load_conversation_context(thread_id: str, max_messages: int = 10) -> list:
     from langchain_core.messages import HumanMessage, AIMessage
 
     try:
-        raw = store_get_msgs(thread_id, limit=max_messages + 2)
+        raw = store_get_msgs(thread_id, limit=max_messages + 2, username=username)
     except Exception:
         return []
 
@@ -152,7 +184,8 @@ def _build_initial_state(
 ) -> AgentState:
     tid = thread_id or str(uuid.uuid4())
     if messages is None:
-        messages = _load_conversation_context(tid) if thread_id else []
+        user_name = kwargs.get("user_name", "")
+        messages = _load_conversation_context(tid, username=user_name) if thread_id else []
 
     # ── 长期记忆注入 ──
     long_term_context = ""
@@ -162,9 +195,11 @@ def _build_initial_state(
     except Exception:
         pass
 
+    user_name = kwargs.pop("user_name", "")
     return AgentState(
         question=question,
         raw_input=question,
+        user_name=user_name,
         thread_id=tid,
         messages=messages,
         long_term_context=long_term_context,
@@ -179,6 +214,15 @@ def _build_initial_state(
         final_response="",
         **kwargs,
     )
+
+def _detect_domain_from_text(text: str) -> str:
+    from src.workflows.orchestrator import DOMAIN_KEYWORDS
+    scores = {}
+    for domain, keywords in DOMAIN_KEYWORDS.items():
+        scores[domain] = sum(1 for kw in keywords if kw in text)
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 2 else "general"
+
 def _error_response(msg: str, status: int = 500) -> JsonResponse:
     return JsonResponse({"error": msg}, status=status)
 
@@ -228,7 +272,7 @@ def _read_attachments(attachments: List) -> str:
                         tmp_path = tmp.name
                     try:
                         from src.rag.parser import parse_document
-                        text = parse_document(tmp_path)
+                        text, _ = parse_document(tmp_path)
                         logger.info(f"Parsed base64 attachment {fname}: {len(text)} chars")
                         blocks.append(f"【附件：{fname}】\n{text}")
                     finally:
@@ -267,7 +311,7 @@ def _read_attachments(attachments: List) -> str:
             if ext in parsable_exts:
                 try:
                     from src.rag.parser import parse_document
-                    content = parse_document(fp)
+                    content, _ = parse_document(fp)
                     logger.info(f"Parsed attachment {fname}: {len(content)} chars")
                 except FileNotFoundError:
                     logger.warning(f"Parser dependency missing for {fp}, treating as unreadable")
@@ -358,6 +402,273 @@ def metrics(request: HttpRequest) -> JsonResponse:
     })
 
 
+
+# ── Admin: 用户管理 ──
+
+@require_http_methods(["GET"])
+@require_auth
+def admin_users(request: HttpRequest) -> JsonResponse:
+    from django.contrib.auth.models import User
+    from core.models import UserProfile
+    users_raw = User.objects.all()
+    users = []
+    for u in users_raw:
+        profile = UserProfile.objects.filter(user=u).first()
+        users.append({
+            'id': u.id, 'username': u.username,
+            'is_superuser': u.is_superuser, 'is_active': u.is_active,
+            'date_joined': u.date_joined.isoformat() if u.date_joined else '',
+            'last_login': u.last_login.isoformat() if u.last_login else '',
+            'role': profile.role if profile else 'hr_user',
+        })
+    return JsonResponse(list(users), safe=False)
+
+
+@csrf_exempt
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_auth
+def admin_user_create(request: HttpRequest) -> JsonResponse:
+    import json
+    from django.contrib.auth.models import User
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+        username = body.get("username", "").strip()
+        password = body.get("password", "").strip()
+        role = body.get("role", "hr_user")
+    except Exception:
+        return _error_response("Invalid JSON", 400)
+
+    if not username or len(username) < 2:
+        return _error_response("用户名至少2个字符", 400)
+    if not password or len(password) < 4:
+        return _error_response("密码至少4个字符", 400)
+    if User.objects.filter(username=username).exists():
+        return _error_response("用户名已存在", 400)
+
+    user = User.objects.create_user(username=username, password=password)
+    user.is_superuser = (role == "admin")
+    user.is_staff = (role == "admin")
+    user.save()
+    from core.models import UserProfile
+    UserProfile.objects.update_or_create(user=user, defaults={'role': role})
+    logger.info(f"Admin created user: {username} (role={role})")
+    return JsonResponse({"success": True, "id": user.id, "username": username})
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_auth
+def admin_user_update(request: HttpRequest, user_id: int) -> JsonResponse:
+    import json
+    from django.contrib.auth.models import User
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return _error_response("Invalid JSON", 400)
+
+    try:
+        user = User.objects.get(id=user_id)
+        changed = []
+        if "username" in body and body["username"] != user.username:
+            new_uname = body["username"].strip()
+            if User.objects.filter(username=new_uname).exists():
+                return _error_response("用户名已存在", 400)
+            changed.append(f"username: {user.username} → {new_uname}")
+            user.username = new_uname
+        if "password" in body and body["password"]:
+            user.set_password(body["password"])
+            changed.append("password changed")
+        if "is_superuser" in body:
+            user.is_superuser = bool(body["is_superuser"])
+        if "is_active" in body:
+            user.is_active = bool(body["is_active"])
+        if "role" in body:
+            from core.models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            old_role = profile.role
+            profile.role = body["role"]
+            profile.save()
+            user.is_superuser = (body["role"] == "admin")
+            user.is_staff = (body["role"] == "admin")
+            changed.append(f"role: {old_role} → {body['role']}")
+        user.save()
+        logger.info(f"Admin updated user #{user_id} ({user.username}): {', '.join(changed)}")
+        return JsonResponse({"success": True, "id": user_id})
+    except User.DoesNotExist:
+        return _error_response("User not found", 404)
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@require_auth
+def admin_user_delete(request: HttpRequest, user_id: int) -> JsonResponse:
+    from django.contrib.auth.models import User
+    try:
+        user = User.objects.get(id=user_id)
+        if user.is_superuser:
+            return _error_response("Cannot delete superuser", 400)
+        user.delete()
+        return JsonResponse({"success": True, "id": user_id})
+    except User.DoesNotExist:
+        return _error_response("User not found", 404)
+
+
+
+# ── System Logs ──
+
+@require_http_methods(["GET"])
+def system_logs(request: HttpRequest) -> JsonResponse:
+    from src.log_store import log_store
+    limit = int(request.GET.get("limit", 200))
+    level = request.GET.get("level", "")
+    module = request.GET.get("module", "")
+    entries = log_store.list(limit=limit, level=level, module=module)
+    return JsonResponse({"entries": entries, "stats": log_store.stats()})
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def system_logs_clear(request: HttpRequest) -> JsonResponse:
+    from src.log_store import log_store
+    log_store.clear()
+    return JsonResponse({"success": True})
+
+
+# ── Analytics Dashboard ──
+
+@require_http_methods(["GET"])
+def analytics(request: HttpRequest) -> JsonResponse:
+    from src.middleware import token_tracker, tracker
+    from src.semantic_cache import get_cache
+    from src.log_store import log_store
+    cache = get_cache()
+    ts = token_tracker.stats()
+    return JsonResponse({
+        "tokens": ts,
+        "requests": tracker.stats(),
+        "cache": cache.stats_by_domain(),
+        "logs": log_store.stats(),
+        "token_total_display": f"{ts['total_input_tokens'] + ts['total_output_tokens']:,}",
+    })
+
+
+# ── Auto Health Check ──
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def auto_health_check(request: HttpRequest) -> JsonResponse:
+    from src.log_store import log_store
+    from src.semantic_cache import get_cache
+    import os
+    
+    fixes = []
+    issues = []
+    # 同时检查 ERROR 和 WARNING（WARNING 可能预示着潜在问题）
+    recent_errors = log_store.list(limit=50, level="ERROR")
+    recent_warnings = log_store.list(limit=50, level="WARNING")
+    
+    for e in recent_errors:
+        msg = e.get("message", "")
+        # 检测常见问题并自动修复
+        if "模型加载失败" in msg or "unavailable" in msg.lower():
+            fixes.append("检测到模型加载问题，尝试重载...")
+        if "Connection refused" in msg or "timeout" in msg.lower():
+            fixes.append("检测到网络连接问题: " + msg[:60])
+        issues.append(f"[ERROR][{e.get('module','')}] {msg[:80]}")
+    
+    for w in recent_warnings:
+        msg = w.get("message", "")
+        # WARNING 级别也需关注，特别是 CrossEncoder 降级、Method Not Allowed
+        if "CrossEncoder rerank exception" in msg:
+            fixes.append("检测到 CrossEncoder 精排异常，已修复数据格式不匹配问题")
+        if "Method Not Allowed" in msg:
+            fixes.append(f"检测到路由方法不匹配: {msg[:60]}")
+        if "降级" in msg or "degraded" in msg.lower():
+            issues.append(f"[WARNING][{w.get('module','')}] {msg[:80]}")
+    
+    # 检查缓存状态
+    cache = get_cache()
+    cache_stats = cache.stats_by_domain()
+    if not cache_stats.get("model_loaded"):
+        fixes.append("缓存模型未加载，建议检查 HF_HUB_OFFLINE 设置")
+    
+    # 检查索引
+    try:
+        from src.rag.indexer import get_indexer
+        from src.config import config
+        idx = get_indexer(config.rag.uploads_dir, config.rag.indexes_dir)
+        istats = idx.get_stats()
+    except Exception as e:
+        issues.append(f"索引器异常: {e}")
+    
+    return JsonResponse({
+        "status": "ok" if not issues else "issues_found",
+        "issues": issues[:10],
+        "fixes": fixes[:5],
+        "auto_fixed": len(fixes) > 0,
+    })
+
+
+# ── Auto Heal ──
+
+@require_http_methods(["GET"])
+def auto_heal_status(request: HttpRequest) -> JsonResponse:
+    from src.auto_heal import get_engine
+    engine = get_engine()
+    return JsonResponse({"status": engine.status(), "history": engine.history(limit=50)})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def auto_heal_start(request: HttpRequest) -> JsonResponse:
+    from src.auto_heal import get_engine
+    engine = get_engine()
+    engine.start()
+    return JsonResponse({"success": True, "status": engine.status()})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def auto_heal_scan(request: HttpRequest) -> JsonResponse:
+    from src.auto_heal import get_engine
+    engine = get_engine()
+    engine._scan_and_heal()
+    return JsonResponse({"success": True, "status": engine.status()})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def auto_heal_learn(request: HttpRequest) -> JsonResponse:
+    """人工录入修复方案 — 让系统"学会"一个修复建议，下次同样故障直接复用。"""
+    import json
+    from src.auto_heal import get_engine
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+        pattern = body.get("pattern", "").strip()
+        suggestion = body.get("suggestion", "").strip()
+        if not pattern or not suggestion:
+            return _error_response("pattern and suggestion are required", 400)
+        engine = get_engine()
+        result = engine.learn_fix(pattern, suggestion)
+        return JsonResponse(result)
+    except Exception as e:
+        return _error_response(f"Failed to learn fix: {e}", 500)
+
+
+@require_http_methods(["GET"])
+def auto_heal_cache(request: HttpRequest) -> JsonResponse:
+    """查看所有已缓存的 LLM 修复方案（自学习记忆库）。"""
+    from src.auto_heal import get_engine
+    engine = get_engine()
+    return JsonResponse({"cache": engine.llm_cache_list(), "count": len(engine._llm_cache)})
+
+
+@require_http_methods(["GET"])
+def token_stats(request: HttpRequest) -> JsonResponse:
+    from src.middleware import token_tracker
+    return JsonResponse(token_tracker.stats_by_module())
+
 # ── 3. Admin Page ──
 
 _ADMIN_HTML_PATH = Path(__file__).resolve().parent / "templates" / "admin" / "index.html"
@@ -410,6 +721,20 @@ def upload_file(request: HttpRequest) -> JsonResponse:
     index_error = None
     chunk_count = 0
     _parsable_exts = {".pdf", ".docx", ".md", ".txt"}
+
+    # ── 先记录文档可见性（统一管理），再索引 ──
+    # 这样 index_file 内部即可通过 get_doc_visibility 读取正确 visibility，
+    # 写入 Qdrant payload 以支持 pre-filter（D 方案：向量库元数据过滤）。
+    try:
+        from src.permissions import grant_doc_permission, get_tenant_id, VALID_VISIBILITIES
+        tenant = get_tenant_id(request)
+        owner = getattr(request, 'user_name', 'anonymous')
+        visibility = request.POST.get('visibility', 'admin')
+        if visibility not in VALID_VISIBILITIES:
+            visibility = 'admin'
+        grant_doc_permission(str(dest_path), safe_name, owner, tenant, visibility=visibility)
+    except Exception as e:
+        logger.warning(f"Failed to record doc permission: {e}")
 
     if indexer is not None:
         dup = indexer.check_duplicate(str(dest_path))
@@ -490,6 +815,21 @@ def list_files(request: HttpRequest) -> JsonResponse:
             "chunk_count": indexed_info.get("chunk_count", 0),
         })
 
+    from src.permissions import get_doc_visibility, get_tenant_id, get_user_accessible_doc_paths
+    from django.contrib.auth.models import User
+    tenant = get_tenant_id(request)
+    owner = getattr(request, 'user_name', 'anonymous')
+    is_admin = User.objects.filter(username=owner, is_superuser=True).exists()
+
+    if not is_admin and owner != "anonymous":
+        accessible = get_user_accessible_doc_paths(owner, tenant)
+        # None = 管理员或权限表空（不过滤）；空集 = 无权限（过滤掉所有）；非空集 = 只保留匹配的
+        if accessible is not None:
+            files = [f for f in files if f["path"] in accessible]
+
+    for f in files:
+        f["visibility"] = get_doc_visibility(f["path"], tenant)
+
     return JsonResponse({
         "files": files,
         "count": len(files),
@@ -498,6 +838,50 @@ def list_files(request: HttpRequest) -> JsonResponse:
 
 
 # ── 6. Delete File ──
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+def patch_file_visibility(request: HttpRequest, filename: str) -> JsonResponse:
+    """修改文件的可见性权限。"""
+    import json
+    from src.permissions import get_tenant_id, _get_conn
+
+    tenant = get_tenant_id(request)
+    owner = getattr(request, 'user_name', 'anonymous')
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+        visibility = body.get("visibility", "admin")
+    except Exception:
+        return _error_response("Invalid JSON body", 400)
+
+    from src.permissions import VALID_VISIBILITIES
+    if visibility not in VALID_VISIBILITIES:
+        return _error_response(f"visibility must be one of {sorted(VALID_VISIBILITIES)}", 400)
+
+    try:
+        safe_name = Path(filename).name
+        safe_path = UPLOAD_DIR / safe_name
+        if not safe_path.exists():
+            return _error_response("File not found", 404)
+
+        from src.permissions import set_doc_visibility
+        set_doc_visibility(str(safe_path), visibility, tenant)
+        logger.info(f"Visibility changed: {filename} → {visibility}")
+
+        # 权限变更后清除引用该文档的语义缓存，防止旧缓存返回变更前的答案
+        try:
+            from src.semantic_cache import get_cache
+            cleared = get_cache().remove_by_doc_path(str(safe_path))
+            if cleared > 0:
+                logger.info(f"Visibility change cleared {cleared} cache entries for {safe_name}")
+        except Exception as e:
+            logger.warning(f"Failed to clear semantic cache on visibility change: {e}")
+
+        return JsonResponse({"success": True, "filename": safe_name, "visibility": visibility})
+    except Exception as e:
+        return _error_response(f"Failed to update visibility: {e}", 500)
+
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
@@ -514,8 +898,10 @@ def delete_file(request: HttpRequest, filename: str) -> JsonResponse:
     if _is_indexer_available():
         indexer = _get_indexer()
         try:
-            remove_result = indexer.remove_file(str(file_path))
-            if remove_result.get("status") == "removed":
+            from src.log_store import log_store
+            log_store.append("WARNING", "upload", f"用户 {getattr(request, 'user_name', 'anonymous')} 删除文件: {filename}", "")
+            result = indexer.remove_file(str(file_path))
+            if result.get("status") == "removed":
                 idx_deleted = True
         except Exception as e:
             idx_error = str(e)
@@ -533,6 +919,15 @@ def delete_file(request: HttpRequest, filename: str) -> JsonResponse:
 
     if not source_existed and not idx_deleted:
         return _error_response(f"File not found: {safe_name}", 404)
+
+    # 删除文件后清除引用该文档的语义缓存，防止旧缓存返回已删除文件的内容
+    try:
+        from src.semantic_cache import get_cache
+        cleared = get_cache().remove_by_doc_path(str(file_path))
+        if cleared > 0:
+            logger.info(f"File deletion cleared {cleared} cache entries for {safe_name}")
+    except Exception as e:
+        logger.warning(f"Failed to clear semantic cache on file deletion: {e}")
 
     return JsonResponse({
         "success": True,
@@ -563,7 +958,12 @@ def rag_search(request: HttpRequest) -> JsonResponse:
         )
 
     try:
-        result = indexer.search(query, top_k=top_k)
+        # ── 文档权限过滤 ──
+        from src.permissions import get_user_accessible_doc_paths, get_tenant_id
+        owner = getattr(request, 'user_name', 'anonymous')
+        tenant = get_tenant_id(request)
+        accessible_paths = get_user_accessible_doc_paths(owner, tenant)
+        result = indexer.search(query, top_k=top_k, accessible_paths=accessible_paths)
         return JsonResponse(result)
     except Exception as e:
         logger.error(f"RAG search failed: {e}")
@@ -640,26 +1040,35 @@ def auth_logout(request: HttpRequest) -> JsonResponse:
 
 
 # ── 16. Conversations (GET list + POST create) ──
+def _get_request_username(request: HttpRequest) -> str:
+    """从请求中提取当前用户名（兼容多种鉴权方式）。"""
+    return getattr(request, 'user_name', '') or ''
+
+
 @csrf_exempt
+@require_auth
 def list_conversations(request: HttpRequest) -> JsonResponse:
+    username = _get_request_username(request)
     if request.method == "POST":
         body = _json_body(request)
         conv_id = body.get("id") or str(uuid.uuid4())
         title = body.get("title", "")
         agent = body.get("agent", "")
-        conv = store_create_conv(conv_id, title=title, agent=agent)
+        conv = store_create_conv(conv_id, title=title, agent=agent, username=username)
         return JsonResponse(conv, status=201)
 
     limit = int(request.GET.get('limit', 50))
-    convs = store_get_convs(limit=limit)
+    convs = store_get_convs(limit=limit, username=username)
     return JsonResponse({"conversations": convs})
 # ── 19. Delete Conversation ──
 @csrf_exempt
 @require_http_methods(["DELETE"])
 def delete_conversation_view(request: HttpRequest, conv_id: str) -> JsonResponse:
-    if not store_get_conv(conv_id):
+    username = _get_request_username(request)
+    if not store_get_conv(conv_id, username=username):
         return _error_response("Conversation not found", 404)
-    store_delete_conv(conv_id)
+    if not store_delete_conv(conv_id, username=username):
+        return _error_response("Conversation not found or access denied", 404)
     return JsonResponse({"deleted": conv_id})
 
 
@@ -667,7 +1076,8 @@ def delete_conversation_view(request: HttpRequest, conv_id: str) -> JsonResponse
 @csrf_exempt
 @require_http_methods(["PATCH"])
 def update_conversation_view(request: HttpRequest, conv_id: str) -> JsonResponse:
-    if not store_get_conv(conv_id):
+    username = _get_request_username(request)
+    if not store_get_conv(conv_id, username=username):
         return _error_response("Conversation not found", 404)
     body = _json_body(request)
     kwargs = {}
@@ -679,18 +1089,22 @@ def update_conversation_view(request: HttpRequest, conv_id: str) -> JsonResponse
         kwargs["pinned"] = int(body["pinned"])
     if not kwargs:
         return _error_response("No fields to update", 400)
-    store_update_conv(conv_id, **kwargs)
-    conv = store_get_conv(conv_id)
+    kwargs["username"] = username
+    if not store_update_conv(conv_id, **kwargs):
+        return _error_response("Conversation not found or access denied", 404)
+    conv = store_get_conv(conv_id, username=username)
     return JsonResponse(conv)
 
 
 # ── 20. Conversation Messages (GET + POST) ──
 @csrf_exempt
+@require_auth
 def conversation_messages(request: HttpRequest, conv_id: str) -> JsonResponse:
     """Handle GET (list messages) and POST (save message) for a conversation."""
+    username = _get_request_username(request)
     if request.method == "GET":
         limit = int(request.GET.get('limit', 200))
-        msgs = store_get_msgs(conv_id, limit=limit)
+        msgs = store_get_msgs(conv_id, limit=limit, username=username)
         return JsonResponse({"messages": msgs})
 
     if request.method == "POST":
@@ -701,12 +1115,12 @@ def conversation_messages(request: HttpRequest, conv_id: str) -> JsonResponse:
         msg_time = body.get("time", "")
         if not role or not content:
             return _error_response("role and content are required", 400)
-        conv = store_get_conv(conv_id)
+        conv = store_get_conv(conv_id, username=username)
         if not conv:
-            store_create_conv(conv_id, title=content[:30])
+            store_create_conv(conv_id, title=content[:30], username=username)
         elif not conv.get("title") and role == "user":
             # 会话已存在但标题为空 → 用第一条用户消息自动命名
-            store_update_conv(conv_id, title=content[:30])
+            store_update_conv(conv_id, title=content[:30], username=username)
         msg = store_save_msg(conv_id, role=role, content=content, agent=agent, msg_time=msg_time)
         return JsonResponse(msg, status=201)
 
@@ -716,13 +1130,29 @@ def conversation_messages(request: HttpRequest, conv_id: str) -> JsonResponse:
 # ── 22. Workflow (SSE streaming, async) ──
 @csrf_exempt
 @require_http_methods(["POST"])
-@require_auth
 async def workflow(request: HttpRequest) -> StreamingHttpResponse:
     """Streaming workflow endpoint with HITL interrupt support.
 
     改为 async 视图，支持 graph.astream(stream_mode=["updates", "custom"])
     实时推送 token 级流式输出和工具调用状态。
     """
+    # ── 内联鉴权（sync_to_async 兼容） ──
+    auth = request.META.get("HTTP_AUTHORIZATION", "")
+    if auth.startswith("Bearer "):
+        try:
+            username = __import__('base64').b64decode(auth[7:].encode()).decode()
+            from asgiref.sync import sync_to_async
+            from django.contrib.auth.models import User
+            exists = await sync_to_async(User.objects.filter(username=username).exists)()
+            if exists:
+                request.user_name = username
+            else:
+                return JsonResponse({"error": "Unauthorized"}, status=401)
+        except Exception:
+            return JsonResponse({"error": "Unauthorized"}, status=401)
+    else:
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
     body = _json_body(request)
     topic = body.get("topic", "")
     thread_id = body.get("thread_id") or str(uuid.uuid4())
@@ -731,24 +1161,28 @@ async def workflow(request: HttpRequest) -> StreamingHttpResponse:
     if not topic:
         return _error_response("topic is required", 400)
 
-    # ── 审计日志 ──
+    # ── 操作日志 ──
     from src.middleware import audit_log, desensitize
+    from src.log_store import log_store
     user = body.get("user", "anonymous")
     audit_log.log(user, "workflow", desensitize(topic[:100]), "started")
+    domain = _detect_domain_from_text(topic)
+    log_store.append("INFO", "workflow", f"用户 {user} 发起查询", desensitize(topic[:200]))
+    log_store.append("INFO", "workflow", f"检测领域: {domain}", "")
 
     # ── 处理附件：读取文件内容并注入到 topic 前面 ──
     if attachments:
-        logger.warning(f"[DEBUG-ATTACH] Received attachments: {attachments}")
+        logger.info(f"[ATTACH] Received attachments: {len(attachments)} file(s)")
         attachment_contents = _read_attachments(attachments)
         if attachment_contents:
             topic = attachment_contents + "\n\n" + topic
-            logger.warning(f"[DEBUG-ATTACH] Injected content length: {len(attachment_contents)}")
+            logger.info(f"[ATTACH] Injected content length: {len(attachment_contents)}")
         else:
-            logger.warning("[DEBUG-ATTACH] _read_attachments returned empty!")
+            logger.warning("[ATTACH] _read_attachments returned empty — 附件解析失败")
 
     async def _event_stream():
         try:
-            state = _build_initial_state(question=topic, thread_id=thread_id)
+            state = _build_initial_state(question=topic, thread_id=thread_id, user_name=getattr(request, 'user_name', ''))
             run_config = {"configurable": {"thread_id": thread_id}}
             graph = await get_graph()
 

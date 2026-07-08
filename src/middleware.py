@@ -200,7 +200,7 @@ def check_rate_limit(request) -> Tuple[bool, str]:
 # ═══════════════════════════════════════════════════════════════
 
 class TokenTracker:
-    """Token 消耗和成本统计。DeepSeek-chat: 输入 ¥1/百万token, 输出 ¥2/百万token。"""
+    """Token 消耗和成本统计（按模块）。DeepSeek-chat: 输入 ¥1/百万token, 输出 ¥2/百万token。"""
     _COST_PER_1K_INPUT = 0.001
     _COST_PER_1K_OUTPUT = 0.002
 
@@ -210,16 +210,38 @@ class TokenTracker:
         self.total_output_tokens = 0
         self.total_requests = 0
         self._hourly = []
+        self._by_module = {}  # {module: {input, output, count}}
 
-    def record(self, input_tokens: int, output_tokens: int):
+    def record(self, input_tokens: int, output_tokens: int, module: str = "", user: str = ""):
         import time
         with self._lock:
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
             self.total_requests += 1
             self._hourly.append((time.time(), input_tokens + output_tokens))
+            if module:
+                m = self._by_module.get(module, {"input": 0, "output": 0, "count": 0, "cost": 0.0})
+                m["input"] += input_tokens
+                m["output"] += output_tokens
+                m["count"] += 1
+                m["cost"] += (input_tokens / 1000 * self._COST_PER_1K_INPUT + output_tokens / 1000 * self._COST_PER_1K_OUTPUT)
+                self._by_module[module] = m
             cutoff = time.time() - 3600
             self._hourly = [(t, n) for t, n in self._hourly if t > cutoff]
+            # 按模块
+            if module:
+                m = self._by_module.get(module, {"input": 0, "output": 0, "count": 0})
+                m["input"] += input_tokens
+                m["output"] += output_tokens
+                m["count"] += 1
+                self._by_module[module] = m
+            # 按用户
+            if user:
+                u = self._by_module.get("user:" + user, {"input": 0, "output": 0, "count": 0})
+                u["input"] += input_tokens
+                u["output"] += output_tokens
+                u["count"] += 1
+                self._by_module["user:" + user] = u
 
     @property
     def total_cost(self) -> float:
@@ -227,13 +249,27 @@ class TokenTracker:
                 self.total_output_tokens / 1000 * self._COST_PER_1K_OUTPUT)
 
     def stats(self) -> dict:
+        with self._lock:
+            by_mod = dict(self._by_module)
+        total = self.total_input_tokens + self.total_output_tokens
         return {
             "total_requests": self.total_requests,
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
+            "total_tokens": total,
             "total_cost_yuan": round(self.total_cost, 4),
             "hourly_tokens": sum(n for _, n in self._hourly),
+            "by_module": {k: {"input": v["input"], "output": v["output"], "count": v["count"],
+                               "cost_yuan": round((v["input"]/1000*self._COST_PER_1K_INPUT + v["output"]/1000*self._COST_PER_1K_OUTPUT), 4)}
+                          for k, v in sorted(by_mod.items(), key=lambda x: x[1]["input"]+x[1]["output"], reverse=True)},
         }
+
+
+    def stats_by_module(self) -> dict:
+        with self._lock:
+            return {"total_input": self.total_input_tokens, "total_output": self.total_output_tokens,
+                    "total_cost": round(self.total_cost, 4), "total_requests": self.total_requests,
+                    "by_module": self._by_module, "hourly_tokens": sum(n for _, n in self._hourly)}
 
 
 token_tracker = TokenTracker()

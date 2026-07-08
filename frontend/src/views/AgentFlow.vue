@@ -15,7 +15,7 @@
     </div>
 
     <!-- ── ECharts 流程图 ── -->
-    <div class="flow-diagram">
+    <div class="flow-diagram" v-reveal="'scale'">
       <GraphVisualizer :active-node="selected" />
     </div>
 
@@ -31,7 +31,7 @@
     </div>
 
     <!-- ── 当前路径的模块卡片 ── -->
-    <div class="flow-details" :key="activePath">
+    <div class="flow-details" :key="activePath" v-reveal="'stagger'">
       <div v-for="d in currentDetails" :key="d.role"
         class="detail-card" :class="{ highlight: d.highlight }"
         @mouseenter="selected = d.role"
@@ -194,8 +194,8 @@ const currentDetails = computed(() => {
 
 /* ── 详情卡片 ── */
 .flow-details { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:10px; flex-shrink:0; }
-.detail-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:15px; transition:all .2s; cursor:default; }
-.detail-card:hover { border-color:var(--border-primary); transform:translateY(-2px); box-shadow:var(--shadow-glow); }
+.detail-card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:15px; transition:transform .3s var(--ease-out),border-color .3s var(--ease),box-shadow .3s var(--ease); cursor:default; }
+.detail-card:hover { border-color:var(--border-primary); transform:translateY(-3px) scale(1.01); box-shadow:var(--shadow-lg),var(--shadow-glow); }
 .detail-card.highlight { border-color:#ff6b6b; box-shadow:0 0 20px rgba(255,107,107,.18); background:linear-gradient(135deg,rgba(255,107,107,.04),var(--bg-card)); }
 .detail-header { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
 .detail-icon { width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#fff; flex-shrink:0; }

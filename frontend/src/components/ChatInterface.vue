@@ -350,13 +350,13 @@ watch(
   display: flex;
   gap: 12px;
   margin-bottom: 20px;
-  animation: slideIn 0.3s var(--ease-out);
+  animation: msgIn 0.4s var(--ease-out) backwards;
 }
 .msg-row.user { flex-direction: row-reverse; }
 
-@keyframes slideIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .msg-avatar {
@@ -397,10 +397,18 @@ watch(
   border: 1px solid var(--border);
   position: relative;
   max-width: 100%;
+  transition: border-color .3s var(--ease), box-shadow .3s var(--ease);
+}
+.msg-bubble:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 2px 16px rgba(0,0,0,.15);
 }
 .msg-row.user .msg-bubble {
   background: var(--gradient-brand-soft);
   border-color: var(--border-primary);
+}
+.msg-row.user .msg-bubble:hover {
+  box-shadow: var(--shadow-glow);
 }
 .msg-bubble.is-error {
   border-color: rgba(239,68,68,0.4);

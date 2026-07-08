@@ -12,8 +12,8 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CHUNK_SIZE = 512
-DEFAULT_CHUNK_OVERLAP = 128
+DEFAULT_CHUNK_SIZE = 1200
+DEFAULT_CHUNK_OVERLAP = 150
 DEFAULT_SEPARATORS = ["\n\n", "\n", "。", ".", "！", "!", "？", "?", "；", ";", " "]
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
@@ -51,7 +51,7 @@ def chunk_text(
         separators = DEFAULT_SEPARATORS
 
     if is_markdown:
-        raw_chunks = _split_markdown_by_headings(text, chunk_size)
+        raw_chunks = _split_markdown_by_headings(text, chunk_size, chunk_overlap)
     else:
         raw_chunks = _split_recursive(text, separators, chunk_size)
         if chunk_overlap > 0 and len(raw_chunks) > 1:
@@ -67,12 +67,13 @@ def chunk_text(
     return cleaned_chunks
 
 
-def _split_markdown_by_headings(text: str, chunk_size: int) -> List[str]:
+def _split_markdown_by_headings(text: str, chunk_size: int, chunk_overlap: int = 0) -> List[str]:
     """Markdown 结构感知分块：只在叶子节点产生 chunk，中间节点仅作祖先链。
 
     叶子节点 = 不包含更深层级子标题的 section。
     每个 chunk 携带完整祖先链（如 "## 二、操作系统\n### 2.1 进程与线程"），
     保证检索「操作系统有哪些内容」时能拉回所有子节的代表性 chunk。
+    当叶子节点的正文超过 chunk_size 时，内部使用递归切割+滑动窗口重叠。
     """
     heading_matches = list(_HEADING_RE.finditer(text))
 
@@ -122,6 +123,9 @@ def _split_markdown_by_headings(text: str, chunk_size: int) -> List[str]:
             result.append(section_text)
         else:
             sub_chunks = _split_recursive(body_text, DEFAULT_SEPARATORS, chunk_size)
+            # 对长段落的子块应用滑动窗口重叠，保证上下文连贯
+            if chunk_overlap > 0 and len(sub_chunks) > 1:
+                sub_chunks = _apply_sliding_window(sub_chunks, chunk_overlap)
             for sc in sub_chunks:
                 result.append(f"{chain_text}\n{sc}")
 

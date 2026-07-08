@@ -28,6 +28,7 @@ def _ensure_db() -> None:
             title TEXT DEFAULT '',
             agent TEXT DEFAULT '',
             pinned INTEGER DEFAULT 0,
+            username TEXT DEFAULT '',
             created_at TEXT DEFAULT '',
             updated_at TEXT DEFAULT ''
         );
@@ -41,51 +42,70 @@ def _ensure_db() -> None:
             FOREIGN KEY (conv_id) REFERENCES conversations(id)
         );
     """)
-    # Migration: add pinned column if missing
-    try:
-        conn.execute("SELECT pinned FROM conversations LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE conversations ADD COLUMN pinned INTEGER DEFAULT 0")
+    # Migration: 补加缺失的列
+    for col, default in [("pinned", "INTEGER DEFAULT 0"), ("username", "TEXT DEFAULT ''")]:
+        try:
+            conn.execute(f"SELECT {col} FROM conversations LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute(f"ALTER TABLE conversations ADD COLUMN {col} {default}")
     conn.commit()
     conn.close()
 
 
-def create_conversation(conv_id: str, title: str = "", agent: str = "", pinned: int = 0) -> Dict[str, Any]:
+def create_conversation(conv_id: str, title: str = "", agent: str = "", pinned: int = 0, username: str = "") -> Dict[str, Any]:
     _ensure_db()
     now = datetime.now().isoformat()
     with _lock:
         conn = sqlite3.connect(str(DB_PATH))
         conn.execute(
-            "INSERT INTO conversations (id, title, agent, pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (conv_id, title, agent, pinned, now, now),
+            "INSERT INTO conversations (id, title, agent, pinned, username, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (conv_id, title, agent, pinned, username, now, now),
         )
         conn.commit()
         conn.close()
     return {"id": conv_id, "title": title, "agent": agent, "pinned": pinned, "created_at": now, "updated_at": now}
 
 
-def get_conversations(limit: int = 50) -> List[Dict[str, Any]]:
+def get_conversations(limit: int = 50, username: str = "") -> List[Dict[str, Any]]:
     _ensure_db()
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, title, agent, pinned, created_at, updated_at FROM conversations ORDER BY pinned DESC, updated_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
+    if username:
+        rows = conn.execute(
+            "SELECT id, title, agent, pinned, created_at, updated_at FROM conversations "
+            "WHERE username = ? ORDER BY pinned DESC, updated_at DESC LIMIT ?",
+            (username, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, title, agent, pinned, created_at, updated_at FROM conversations "
+            "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def get_conversation(conv_id: str) -> Optional[Dict[str, Any]]:
+def get_conversation(conv_id: str, username: str = "") -> Optional[Dict[str, Any]]:
     _ensure_db()
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT id, title, agent, pinned, created_at, updated_at FROM conversations WHERE id=?", (conv_id,)).fetchone()
+    if username:
+        row = conn.execute(
+            "SELECT id, title, agent, pinned, created_at, updated_at FROM conversations "
+            "WHERE id = ? AND username = ?",
+            (conv_id, username),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id, title, agent, pinned, created_at, updated_at FROM conversations "
+            "WHERE id = ?", (conv_id,),
+        ).fetchone()
     conn.close()
     return dict(row) if row else None
 
 
-def update_conversation(conv_id: str, title: Optional[str] = None, agent: Optional[str] = None, pinned: Optional[int] = None) -> None:
+def update_conversation(conv_id: str, title: Optional[str] = None, agent: Optional[str] = None, pinned: Optional[int] = None, username: str = "") -> bool:
     _ensure_db()
     now = datetime.now().isoformat()
     updates = ["updated_at = ?"]
@@ -100,21 +120,38 @@ def update_conversation(conv_id: str, title: Optional[str] = None, agent: Option
         updates.append("pinned = ?")
         params.append(pinned)
     params.append(conv_id)
+    if username:
+        params.append(username)
+        where_clause = "WHERE id = ? AND username = ?"
+    else:
+        where_clause = "WHERE id = ?"
     with _lock:
         conn = sqlite3.connect(str(DB_PATH))
-        conn.execute(f"UPDATE conversations SET {', '.join(updates)} WHERE id = ?", params)
+        cur = conn.execute(f"UPDATE conversations SET {', '.join(updates)} {where_clause}", params)
+        affected = cur.rowcount
         conn.commit()
         conn.close()
+    return affected > 0
 
 
-def delete_conversation(conv_id: str) -> None:
+def delete_conversation(conv_id: str, username: str = "") -> bool:
     _ensure_db()
     with _lock:
         conn = sqlite3.connect(str(DB_PATH))
+        if username:
+            # 先校验归属
+            row = conn.execute(
+                "SELECT 1 FROM conversations WHERE id = ? AND username = ?",
+                (conv_id, username),
+            ).fetchone()
+            if not row:
+                conn.close()
+                return False
         conn.execute("DELETE FROM messages WHERE conv_id = ?", (conv_id,))
         conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
         conn.commit()
         conn.close()
+    return True
 
 
 def save_message(conv_id: str, role: str, content: str, agent: str = "", msg_time: str = "") -> Dict[str, Any]:
@@ -133,10 +170,19 @@ def save_message(conv_id: str, role: str, content: str, agent: str = "", msg_tim
     return {"id": msg_id, "conv_id": conv_id, "role": role, "content": content, "agent": agent, "time": msg_time}
 
 
-def get_messages(conv_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+def get_messages(conv_id: str, limit: int = 200, username: str = "") -> List[Dict[str, Any]]:
     _ensure_db()
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    if username:
+        # 先校验对话归属
+        owner = conn.execute(
+            "SELECT 1 FROM conversations WHERE id = ? AND username = ?",
+            (conv_id, username),
+        ).fetchone()
+        if not owner:
+            conn.close()
+            return []
     rows = conn.execute(
         "SELECT id, conv_id, role, content, agent, time FROM messages WHERE conv_id=? ORDER BY id ASC LIMIT ?",
         (conv_id, limit),

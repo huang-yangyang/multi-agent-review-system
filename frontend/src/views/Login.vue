@@ -1,7 +1,7 @@
 <template>
   <div class="login-page">
     <!-- 左侧：品牌介绍区 -->
-    <aside class="brand-panel">
+    <aside class="brand-panel" v-reveal="'left'">
       <div class="brand-bg-orb orb-1"></div>
       <div class="brand-bg-orb orb-2"></div>
       <div class="brand-grid"></div>
@@ -42,7 +42,7 @@
 
     <!-- 右侧：登录卡 -->
     <main class="login-panel">
-      <div class="login-card">
+      <div class="login-card aurora" v-reveal="'scale'">
         <div class="login-header">
           <h2>欢迎回来</h2>
           <p>登录以进入控制台</p>
@@ -80,6 +80,7 @@
               type="primary"
               size="large"
               class="login-btn"
+              v-magnetic
               :loading="loading"
               @click="handleLogin"
             >
@@ -95,7 +96,7 @@
         </el-form>
 
         <div class="quick-login">
-          <div class="quick-title"><span>快捷登录（密码均为 123）</span></div>
+          <div class="quick-title"><span>快捷登录（密码均为 1234）</span></div>
           <div class="quick-chips">
             <button
               v-for="acc in presets"
@@ -137,9 +138,12 @@ const rules = {
 }
 
 const presets = [
-  { username: 'admin', role: '管理员', color: '#22d3ee', icon: Cpu },
-  { username: 'user1', role: '普通用户', color: '#818cf8', icon: ChatDotRound },
-  { username: 'user2', role: '普通用户', color: '#34d399', icon: Files }
+  { username: 'admin',       role: '系统管理员', color: '#22d3ee', icon: Cpu },
+  { username: 'legal_lead',  role: '法律主管',   color: '#a78bfa', icon: ChatDotRound },
+  { username: 'legal_user',  role: '法律员工',   color: '#818cf8', icon: ChatDotRound },
+  { username: 'hr_lead',     role: '人事主管',   color: '#f59e0b', icon: Files },
+  { username: 'hr_user',     role: '人事员工',   color: '#fbbf24', icon: Files },
+  { username: 'general_user',role: '员工',       color: '#34d399', icon: Files },
 ]
 
 const features = [
@@ -150,7 +154,7 @@ const features = [
 
 function fillAccount(acc) {
   form.username = acc.username
-  form.password = '123'
+  form.password = '1234'
   error.value = ''
 }
 
@@ -172,7 +176,7 @@ async function handleLogin() {
     if (r.ok && data.token) {
       localStorage.setItem('token', data.token)
       localStorage.setItem('username', data.username)
-      router.replace('/')
+      window.location.href = '/'
     } else {
       error.value = data.detail || data.error || '登录失败'
     }
@@ -268,7 +272,7 @@ async function handleLogin() {
   margin-bottom: 48px;
 }
 .brand-headline h2 {
-  font-size: 40px; font-weight: 800; line-height: 1.25; letter-spacing: -1px;
+  font-size: var(--step-2); font-weight: 800; line-height: 1.25; letter-spacing: -1px;
   margin-bottom: 16px;
 }
 .brand-headline h2 .grad {
@@ -327,9 +331,21 @@ async function handleLogin() {
 .login-card {
   width: 100%; max-width: 400px;
 }
+/* 融合：极光描边登录卡（套用全局 .aurora 旋转渐变边框） */
+.login-card.aurora {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  box-shadow: var(--shadow-lg);
+  transition: box-shadow var(--transition);
+}
+/* 融合：输入框聚焦时整卡微光（:has() 父级响应） */
+.login-card.aurora:has(.el-input__wrapper.is-focus) {
+  box-shadow: var(--shadow-lg), 0 0 0 3px rgba(var(--primary-rgb), 0.14);
+}
 .login-header { margin-bottom: 32px; }
 .login-header h2 {
-  font-size: 26px; font-weight: 700; letter-spacing: -0.5px;
+  font-size: var(--step-1); font-weight: 700; letter-spacing: -0.5px;
 }
 .login-header p {
   font-size: 13px; color: var(--text-muted); margin-top: 6px;
@@ -366,12 +382,18 @@ async function handleLogin() {
 .quick-title::before { left: 0; }
 .quick-title::after { right: 0; }
 
+/* 融合：Subgrid 让各 chip 的「图标 / 名称 / 角色」跨卡片对齐 */
 .quick-chips {
-  display: flex; gap: 8px; justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  grid-template-rows: auto auto auto;
+  gap: 8px;
 }
 .quick-chip {
-  flex: 1;
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  grid-row: span 3;
+  display: grid;
+  grid-template-rows: subgrid;
+  align-items: center;
   padding: 12px 8px;
   background: var(--bg-card);
   border: 1px solid var(--border);

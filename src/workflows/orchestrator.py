@@ -22,6 +22,7 @@ research analysis customer_service
 Checkpointer: AsyncSqliteSaver (persistent across sessions).
 """
 
+import asyncio
 import json
 import re
 import traceback
@@ -411,12 +412,13 @@ def _detect_domain(text: str) -> str:
 async def decomposer_node(state: AgentState) -> Dict:
     """Decompose user input into structured task description and sub-tasks."""
     trace_id = state.get("trace_id", "")
+    question = state.get("question", "") or state.get("raw_input", "")
+    from src.log_store import log_store
+    log_store.append("INFO", "decomposer", f"开始解析用户意图", f"问题: {question[:100]}")
     logger.info(
         "decomposer_node: starting task decomposition",
         extra={"component": "orchestrator", "trace_id": trace_id},
     )
-
-    question = state.get("question", "") or state.get("raw_input", "")
     if not question:
         return {"error": "No input provided", "task_description": ""}
 
@@ -520,10 +522,31 @@ async def knowledge_retriever_node(state: AgentState) -> Dict:
         return {"retrieved_context": []}
 
     try:
-        raw = knowledge_search(question, top_k=5, domain=domain)
+        # 不传递 domain 参数：领域过滤在预检索阶段过于激进，
+        # 查询端 domain 检测（基于问题文本）可能与文档端 domain 标签
+        # （基于文档正文检测）不一致，导致合法文档被错误排除。
+        # 领域过滤由 research_node 中的独立搜索兜底处理。
+        raw = await asyncio.to_thread(
+            knowledge_search,
+            question,
+            top_k=10,
+            domain=state.get("domain"),
+            user_name=state.get("user_name", ""),
+        )
         result = json.loads(raw)
+        # ── 用户权限过滤 ──
+        try:
+            from src.permissions import get_user_accessible_doc_paths
+            user_name = state.get("user_name", "")
+            if user_name:
+                accessible = get_user_accessible_doc_paths(user_name)
+                if accessible is not None:
+                    result["results"] = [r for r in (result.get("results") or [])
+                        if any(p in r.get("doc_id","") for p in accessible)]
+        except Exception:
+            pass
         contexts = []
-        if result.get("found"):
+        if result.get("found") and result.get("results"):
             for r in result.get("results", []):
                 contexts.append({
                     "doc_id": r.get("doc_id", ""),
@@ -531,8 +554,7 @@ async def knowledge_retriever_node(state: AgentState) -> Dict:
                     "score": r.get("score", 0),
                 })
         writer = get_stream_writer()
-        domain_info = f" (领域: {domain})" if domain and domain != "general" else ""
-        writer({"phase": "kb_presearch_done", "message": f"知识库预检索完成 ({len(contexts)} 条命中){domain_info}"})
+        writer({"phase": "kb_presearch_done", "message": f"知识库预检索完成 ({len(contexts)} 条命中)"})
         return {"retrieved_context": contexts}
     except Exception as e:
         logger.error(
@@ -597,11 +619,41 @@ def _collect_source_info(retrieved_context: List[Dict]) -> tuple:
     return source_files_str, max_mtime
 
 
+def _format_direct_rag_answer(question: str, kb_texts: List[str]) -> str:
+    """将高相似度的知识库检索结果格式化为直接回答。
+
+    当 RAG 检索结果与用户问题极其相似时（score >= 0.85），
+    跳过 LLM 合成，直接返回向量化的原文内容。
+
+    Args:
+        question: 用户原始问题
+        kb_texts: 知识库检索到的文本片段列表
+
+    Returns:
+        格式化后的回答字符串
+    """
+    if not kb_texts:
+        return ""
+
+    parts = ["📄 文档来源\n"]
+    parts.append(f"根据知识库检索结果，关于「{question}」的内容如下：\n")
+
+    for i, text in enumerate(kb_texts, 1):
+        parts.append(f"---\n[{i}]\n{text}")
+
+    parts.append("\n---")
+    parts.append("\n📌 以上为知识库原文内容。如需联网搜索最新信息或 AI 补充通用知识，请回复\"需要补充\"。")
+
+    return "\n".join(parts)
+
+
 async def research_node(state: AgentState) -> Dict:
     """Execute the Research Agent pipeline (fast path: fixed 3-phase with streaming).
 
     Emits custom SSE events for each phase so the frontend can show progress.
     Cache-first: check semantic cache before running full pipeline.
+    High-confidence RAG: if KB search returns very high similarity results,
+    directly return the vectorized text without LLM synthesis.
     """
     trace_id = state.get("trace_id", "")
     question = state.get("question", "") or state.get("raw_input", "")
@@ -618,24 +670,26 @@ async def research_node(state: AgentState) -> Dict:
         pre_contexts = state.get("retrieved_context", []) or []
         pre_texts = [c.get("text", "") for c in pre_contexts if c.get("text")]
 
+        # 从预检索上下文提取「引用了哪些文档」，用于缓存权限过滤
+        referenced_docs = [
+            c.get("doc_id", "").split("::")[0]
+            for c in (pre_contexts or [])
+            if c.get("doc_id") and "::" in c.get("doc_id", "")
+        ]
+        referenced_docs = list(dict.fromkeys([d for d in referenced_docs if d]))
+
         # Phase 1: Internal KB search —─ emit status
         writer({"phase": "kb_search", "message": "正在搜索知识库..."})
         kb_texts = list(pre_texts)
         if not kb_texts:
-            kb_texts = await agent._search_internal_texts(question, trace_id)
+            user_name = state.get("user_name", "")
+            kb_texts, search_docs = await agent._search_internal_texts(question, trace_id, user_name=user_name, return_docs=True)
+            # 合并实际 KB 搜索引用的文档到 referenced_docs（用于缓存权限过滤）
+            referenced_docs = list(dict.fromkeys(referenced_docs + search_docs))
         writer({
             "phase": "kb_search_done",
             "message": f"知识库匹配到 {len(kb_texts)} 条相关片段",
             "count": len(kb_texts),
-        })
-
-        # Phase 2: External web search —─ emit status
-        writer({"phase": "web_search", "message": "正在联网搜索..."})
-        web_texts = agent._search_external_texts(question, trace_id)
-        writer({
-            "phase": "web_search_done",
-            "message": f"联网搜索到 {len(web_texts)} 条结果",
-            "count": len(web_texts),
         })
 
         # Extract conversation history
@@ -647,22 +701,19 @@ async def research_node(state: AgentState) -> Dict:
 
         long_term_context = state.get("long_term_context", "") or ""
 
-        # ── 审查任务检测（finance 领域专属，严禁泄漏到 contract/law 等其他领域） ──
-        # 注入条件：domain == "finance" AND 问题包含审查关键词
-        # 领域隔离保证：domain 由 _detect_domain() 基于 finance 领域关键词（授信/风控/
-        # 贷款/资产负债等）匹配生成，contract/law/general 领域不会命中 finance，
-        # 从而确保 REVIEW_SYSTEM_PROMPT 不会跨领域泄漏。
         domain = state.get("domain", "general")
 
-        # ── 缓存查：语义指纹匹配（含领域过滤 + 文档感知） ──
+        # ── 缓存查：语义指纹匹配（跨用户共享 + 按内容权限安全） ──
         cache = get_cache()
+        user_name = state.get("user_name", "")
         if question:
             source_files_str, _ = _collect_source_info(pre_contexts)
-            cached = cache.search(question, domain=domain, source_file=source_files_str)
+            # reader_user 传入用于权限过滤：引用了当前用户无权访问文档的缓存会被跳过
+            cached = cache.search(question, domain=domain, reader_user=user_name)
             if cached:
                 answer, score = cached
                 logger.info(
-                    f"research_node: semantic cache hit (score={score:.4f})",
+                    f"research_node: semantic cache hit (score={score:.4f}, reader={user_name or 'public'})",
                     extra={"component": "orchestrator", "trace_id": trace_id},
                 )
                 writer({"phase": "cache_hit", "message": f"命中语义缓存 (相似度 {score:.2f})"})
@@ -677,6 +728,50 @@ async def research_node(state: AgentState) -> Dict:
             domain == "finance"
             and any(kw in question_lower for kw in _REVIEW_KEYWORDS)
         )
+
+        # ── 高相似度 RAG 直出：如果知识库检索结果与问题极其相似，
+        #    直接返回向量化的文本内容，跳过 LLM 合成和网络搜索 ──
+        HIGH_CONFIDENCE_THRESHOLD = 0.85
+        if not is_review_task and pre_contexts:
+            top_score = max((c.get("score", 0) for c in pre_contexts), default=0)
+            if top_score >= HIGH_CONFIDENCE_THRESHOLD:
+                logger.info(
+                    f"research_node: high-confidence RAG hit (score={top_score:.4f}), direct return",
+                    extra={"component": "orchestrator", "trace_id": trace_id},
+                )
+                writer({"phase": "kb_direct_hit", "message": f"知识库高相似度命中 (score={top_score:.2f})，直接返回原文"})
+
+                # 重新搜索获取完整文本（pre_contexts 中的文本被截断到 500 字符）
+                user_name_rag = state.get("user_name", "")
+                full_kb_texts, rag_docs = await agent._search_internal_texts(question, trace_id, user_name=user_name_rag, return_docs=True)
+                # 合并实际 KB 搜索引用的文档到 referenced_docs
+                referenced_docs = list(dict.fromkeys(referenced_docs + rag_docs))
+
+                direct_answer = _format_direct_rag_answer(question, full_kb_texts or pre_texts)
+                if direct_answer:
+                    writer({"phase": "synthesize_done", "message": f"直接返回知识库原文 ({len(direct_answer)} 字符)"})
+                    # 缓存写入（跨用户共享，记录贡献用户与引用文档）
+                    source_files, max_mtime = _collect_source_info(pre_contexts)
+                    cache.add(
+                        question, direct_answer,
+                        source_file=source_files, indexed_at=max_mtime, domain=domain,
+                        contributor_user=user_name, referenced_docs=referenced_docs,
+                    )
+                    return {
+                        "research_report": direct_answer,
+                        "retrieved_context": [],
+                        "cache_hit": False,
+                    }
+
+        # Phase 2: External web search —─ emit status (仅在高相似度未命中时执行)
+        writer({"phase": "web_search", "message": "正在联网搜索..."})
+        web_texts = agent._search_external_texts(question, trace_id)
+        writer({
+            "phase": "web_search_done",
+            "message": f"联网搜索到 {len(web_texts)} 条结果",
+            "count": len(web_texts),
+        })
+
         system_prompt_override = REVIEW_SYSTEM_PROMPT if is_review_task else None
         if is_review_task:
             logger.info(
@@ -684,6 +779,25 @@ async def research_node(state: AgentState) -> Dict:
                 extra={"component": "orchestrator", "trace_id": trace_id},
             )
             writer({"phase": "review_mode", "message": "检测到授信报告审查任务，启用专用审查流程"})
+
+        # ── KB 相关性过滤：低相关度的 KB 结果不传入 LLM，
+        #    避免 LLM 将不相关的 KB 内容误标为「📄 文档来源」 ──
+        KB_RELEVANCE_THRESHOLD = 0.3
+        if pre_contexts and not is_review_task:
+            relevant_texts = [
+                c.get("text", "") for c in pre_contexts
+                if c.get("score", 0) >= KB_RELEVANCE_THRESHOLD and c.get("text")
+            ]
+            if relevant_texts:
+                kb_texts = relevant_texts
+            else:
+                # 所有 KB 结果相关度都太低，清空 kb_texts
+                # LLM 将只看到网络搜索结果，正确标注为「🌐 联网搜索」
+                kb_texts = []
+                logger.info(
+                    f"research_node: KB results below relevance threshold ({KB_RELEVANCE_THRESHOLD}), using web search only",
+                    extra={"component": "orchestrator", "trace_id": trace_id},
+                )
 
         # ── 确定性前置提取：从报告和规程中自动提取并比对量化指标 ──
         if is_review_task:
@@ -718,7 +832,11 @@ async def research_node(state: AgentState) -> Dict:
         # ── 缓存写 ──
         if question and full_report:
             source_files, max_mtime = _collect_source_info(pre_contexts)
-            cache.add(question, full_report, source_file=source_files, indexed_at=max_mtime, domain=domain)
+            cache.add(
+                question, full_report,
+                source_file=source_files, indexed_at=max_mtime, domain=domain,
+                contributor_user=user_name, referenced_docs=referenced_docs,
+            )
 
         return {
             "research_report": full_report,
@@ -784,7 +902,14 @@ async def agentic_research_node(state: AgentState) -> Dict:
         writer({"phase": "agentic_start", "message": "启动自主搜索 (Tool Calling 模式)"})
         agent = ResearchAgent(agent_id="agentic_research_orchestrator")
 
-        result = await agent._agentic_search(state, system_prompt_override=system_prompt_override)
+        # ── 设置用户上下文变量，供 LangChain Tool (kb_search_tool) 读取 ──
+        from src.tools import _current_user
+        user_name = state.get("user_name", "")
+        token = _current_user.set(user_name)
+        try:
+            result = await agent._agentic_search(state, system_prompt_override=system_prompt_override)
+        finally:
+            _current_user.reset(token)
         report = result.get("research_report", "")
         # ── 代码级护栏：审查输出结构校验 ──
         if is_review_task and report:
@@ -822,15 +947,17 @@ async def review_pipeline_node(state: AgentState) -> Dict:
     """
     trace_id = state.get("trace_id", "")
     question = state.get("question", "") or state.get("raw_input", "")
+    domain = state.get("domain", "general")
     writer = get_stream_writer()
 
+    from src.log_store import log_store as _ls
+    _ls.append("INFO", "review", f"启动 Map-Reduce 审查管线 (domain={domain})", f"问题: {question[:100]}")
     logger.info(
         "review_pipeline_node: starting Map-Reduce review pipeline",
         extra={"component": "orchestrator", "trace_id": trace_id},
     )
 
     try:
-        domain = state.get("domain", "general")
 
         # ── 获取参考文档全文（按领域选择不同的搜索词） ──
         from src.rag.indexer import get_indexer
@@ -912,8 +1039,19 @@ async def review_pipeline_node(state: AgentState) -> Dict:
 
         # ── 缓存写 ──
         if question and final_report:
-            cache.add(question, final_report, domain=domain,
-                      source_file=_collect_source_info(state.get("retrieved_context", []))[0])
+            review_src, _ = _collect_source_info(state.get("retrieved_context", []))
+            review_ref_docs = [
+                c.get("doc_id", "").split("::")[0]
+                for c in (state.get("retrieved_context", []) or [])
+                if c.get("doc_id") and "::" in c.get("doc_id", "")
+            ]
+            review_ref_docs = list(dict.fromkeys([d for d in review_ref_docs if d]))
+            cache.add(
+                question, final_report, domain=domain,
+                source_file=review_src,
+                contributor_user=state.get("user_name", ""),
+                referenced_docs=review_ref_docs,
+            )
 
         return {
             "research_report": final_report,
@@ -972,11 +1110,30 @@ async def aggregator_node(state: AgentState) -> Dict:
     )
 
     intent = state.get("intent", "research")
+    domain = state.get("domain", "general")
 
     final_parts = []
     if intent == "research":
         report = state.get("research_report", "")
-        final_parts.append(report if report else "Research completed but no report generated.")
+        if not report:
+            # 空报告可能由多种原因导致：知识库索引为空、搜索未命中、
+            # 检索过程中异常等。不再错误归属为"权限拦截"。
+            kb_error = state.get("kb_search_error", "")
+            error_msg = state.get("error", "")
+            if kb_error:
+                final_parts.append(
+                    f"知识库检索出现异常，请稍后重试。"
+                    f"（错误详情: {kb_error[:200]}）"
+                )
+            elif error_msg:
+                final_parts.append(f"处理过程中出现异常，请稍后重试。")
+            else:
+                final_parts.append(
+                    "知识库中未找到相关内容。"
+                    "请确认已上传相关文档并完成索引，或尝试使用不同的关键词查询。"
+                )
+        else:
+            final_parts.append(report)
     elif intent == "analysis":
         result = state.get("analysis_result", "")
         final_parts.append(result if result else "Analysis completed but no results generated.")

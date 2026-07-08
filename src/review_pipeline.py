@@ -662,6 +662,18 @@ async def execute_contract_review_pipeline(
             HumanMessage(content=user_prompt),
         ])
         reduce_output = response.content.strip() if hasattr(response, "content") else str(response).strip()
+        try:
+            from src.middleware import token_tracker
+            usage = getattr(response, 'usage_metadata', None) or {}
+            inp = usage.get('input_tokens', 0) or getattr(response, 'input_tokens', 0) or 0
+            out = usage.get('output_tokens', 0) or getattr(response, 'output_tokens', 0) or 0
+            if not inp and hasattr(response, 'response_metadata'):
+                inp = response.response_metadata.get('token_usage', {}).get('prompt_tokens', 0)
+                out = response.response_metadata.get('token_usage', {}).get('completion_tokens', 0)
+            if inp or out:
+                token_tracker.record(inp, out, module="review_reduce")
+        except Exception:
+            pass
 
         # ── 校验员 ──
         try:

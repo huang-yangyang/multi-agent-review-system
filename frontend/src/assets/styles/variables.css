@@ -83,4 +83,17 @@
   /* —— 字体 —— */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* —— 融合展示页：第三强调色（粉）—— */
+  --accent-pink: #f472b6;
+
+  /* —— 流体字号（clamp 随视口平滑伸缩，避免断点跳变）—— */
+  --step--1: clamp(0.78rem, 0.74rem + 0.22vw, 0.90rem);
+  --step-0:  clamp(0.95rem, 0.90rem + 0.25vw, 1.05rem);
+  --step-1:  clamp(1.20rem, 1.05rem + 0.70vw, 1.60rem);
+  --step-2:  clamp(1.80rem, 1.40rem + 2.00vw, 3.00rem);
+  --step-3:  clamp(2.40rem, 1.80rem + 3.20vw, 4.50rem);
+
+  /* —— 流体间距 —— */
+  --space-fluid: clamp(1rem, 0.6rem + 2vw, 2.5rem);
 }

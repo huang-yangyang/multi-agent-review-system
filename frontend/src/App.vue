@@ -1,5 +1,7 @@
 <template>
   <el-config-provider :locale="zhCn">
+    <div class="scroll-progress" aria-hidden="true"></div>
+
     <div class="app-container" v-if="isLoggedIn">
       <header class="app-header">
         <!-- 左：品牌 Logo -->
@@ -60,9 +62,7 @@
 
       <main class="app-main">
         <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <component :is="Component" />
-          </transition>
+          <component :is="Component" />
         </router-view>
       </main>
     </div>
@@ -130,13 +130,26 @@ async function handleLogout() {
   router.push('/login')
 }
 
+// 捕获式监听任意滚动容器，把进度写入 --scroll-progress 供顶部进度条使用
+function updateScrollProgress(e) {
+  const el = (e && e.target && e.target !== document && e.target !== document.body)
+    ? e.target
+    : document.documentElement
+  const max = el.scrollHeight - el.clientHeight
+  const p = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0
+  document.documentElement.style.setProperty('--scroll-progress', p.toFixed(4))
+}
+
 onMounted(() => {
   checkHealth()
   healthTimer = setInterval(checkHealth, 30000)
+  document.addEventListener('scroll', updateScrollProgress, true)
+  updateScrollProgress()
 })
 
 onBeforeUnmount(() => {
   if (healthTimer) clearInterval(healthTimer)
+  document.removeEventListener('scroll', updateScrollProgress, true)
 })
 </script>
 

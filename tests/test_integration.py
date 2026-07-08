@@ -117,7 +117,8 @@ class TestLaborPipeline:
         if not os.path.exists(pdf):
             pytest.skip("测试 PDF 不存在")
         from src.rag.parser import parse_document
-        return parse_document(pdf)
+        text, _ = parse_document(pdf)
+        return text
 
     @pytest.fixture
     def labor_kb_text(self):

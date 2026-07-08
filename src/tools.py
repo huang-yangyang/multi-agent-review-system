@@ -8,6 +8,7 @@
 熔断保护：百度和 Tavily 各自独立熔断。
 """
 
+import contextvars
 import json
 import logging
 import os
@@ -18,6 +19,9 @@ from .resilience import baidu_circuit, tavily_circuit, CircuitBreakerOpenError
 from .core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# ── 用户上下文变量（供 LangChain Tool 传递当前用户） ──
+_current_user: contextvars.ContextVar[str] = contextvars.ContextVar("_current_user", default="")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 THRESHOLD = 0.3
@@ -74,18 +78,16 @@ def _rerank_web_results(query: str, results: list[dict], threshold: float = THRE
         candidates = []
         for r in results:
             text = f"{r['title']} {r['snippet']}".strip()
-            candidates.append((r["title"], text, 0.0))
+            candidates.append({"chunk": text, "title": r["title"], "original": r})
         reranked = reranker.rerank(query, candidates, top_k=top_k)
         filtered = []
-        for title, _text, score in reranked:
+        for c in reranked:
+            score = c.get("rerank_score", 0)
             if score < threshold:
                 continue
-            for r in results:
-                if r["title"] == title:
-                    out = dict(r)
-                    out["rerank_score"] = round(score, 4)
-                    filtered.append(out)
-                    break
+            out = dict(c.get("original", {}))
+            out["rerank_score"] = round(score, 4)
+            filtered.append(out)
         logger.info(
             f"CrossEncoder filtered: {len(results)} → {len(filtered)}",
             extra={"component": "tools"},
@@ -237,7 +239,7 @@ def expand_query(query: str) -> list:
 
 # ── 知识库搜索 ───────────────────────────────────────────
 
-def knowledge_search(query: str, top_k: int = 5, min_rrf_score: float = 0.005, domain: Optional[str] = None) -> str:
+def knowledge_search(query: str, top_k: int = 5, min_rrf_score: float = 0.005, domain: Optional[str] = None, user_name: str = "") -> str:
     """本地 FAISS + BM25 + RRF 混合索引知识库搜索。
 
     Args:
@@ -246,13 +248,16 @@ def knowledge_search(query: str, top_k: int = 5, min_rrf_score: float = 0.005, d
         min_rrf_score: 最低相关度阈值。
         domain: 领域过滤标签（"finance"/"contract"/"law"/"general"），
                 None 或 "general" 时不过滤。
+        user_name: 当前用户名，用于文档权限过滤。
+                   管理员用户不过滤；普通用户仅搜索有权访问的文档。
+                   为空时不过滤（向后兼容）。
 
     Returns:
         JSON 格式搜索结果。
     """
     logger.info(
         "knowledge_search started",
-        extra={"component": "tools", "query": query[:100], "top_k": top_k},
+        extra={"component": "tools", "query": query[:100], "top_k": top_k, "user": user_name},
     )
     try:
         from .rag.indexer import get_indexer
@@ -262,8 +267,36 @@ def knowledge_search(query: str, top_k: int = 5, min_rrf_score: float = 0.005, d
 
         indexer = get_indexer(uploads_dir=uploads_dir, indexes_dir=indexes_dir)
 
+        # ── 文档权限过滤 ──
+        accessible_paths = None
+        if user_name:
+            try:
+                from .permissions import get_user_accessible_doc_paths
+                accessible_paths = get_user_accessible_doc_paths(user_name)
+                # None = 管理员或权限表为空，不过滤
+                # 空集 = 用户无权限，过滤掉所有
+                # 非空集 = 只搜索这些文档
+                if accessible_paths is not None:
+                    logger.info(
+                        f"knowledge_search: user={user_name}, accessible_docs={len(accessible_paths)}",
+                        extra={"component": "tools", "user": user_name},
+                    )
+                else:
+                    logger.info(
+                        f"knowledge_search: user={user_name}, no filtering (admin or empty table)",
+                        extra={"component": "tools", "user": user_name},
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"knowledge_search: permission check failed, allowing all: {e}",
+                    extra={"component": "tools"},
+                )
+
         queries = expand_query(query)
-        search_results = [indexer.search(q, top_k=top_k, domain=domain) for q in queries]
+        search_results = [
+            indexer.search(q, top_k=top_k, domain=domain, accessible_paths=accessible_paths)
+            for q in queries
+        ]
 
         all_results, seen_docs = [], set()
         total_bm25, total_dense = 0, 0
@@ -382,7 +415,9 @@ def kb_search_tool(query: str, domain: Optional[str] = None) -> str:
         query: 搜索查询词或问题
         domain: 可选领域标签 "finance"/"contract"/"law"，限定搜索范围。
     """
-    raw = knowledge_search(query, top_k=5, domain=domain)
+    # 从上下文变量获取当前用户（由 agentic_research_node 设置）
+    user = _current_user.get()
+    raw = knowledge_search(query, top_k=5, domain=domain, user_name=user)
     result = json.loads(raw)
     if not result.get("found") or not result.get("results"):
         return "知识库中未找到相关内容。"

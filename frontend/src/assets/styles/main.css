@@ -365,3 +365,295 @@ body::after {
   background: var(--primary-dim) !important;
   color: var(--text-primary) !important;
 }
+
+/* ============================================================
+   高级动效系统
+   ============================================================ */
+
+/* —— 磁性按钮 —— */
+.magnetic {
+  transition: transform 0.3s var(--ease-out);
+  will-change: transform;
+}
+
+/* —— 入场动画工具类 —— */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s var(--ease-out), transform 0.6s var(--ease-out);
+  will-change: opacity, transform;
+}
+.reveal.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal-scale {
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 0.5s var(--ease-out), transform 0.5s var(--ease-out);
+}
+.reveal-scale.revealed {
+  opacity: 1;
+  transform: scale(1);
+}
+.reveal-left {
+  opacity: 0;
+  transform: translateX(-30px);
+  transition: opacity 0.5s var(--ease-out), transform 0.5s var(--ease-out);
+}
+.reveal-left.revealed {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* —— 交错入场 —— */
+.reveal-stagger > * {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.5s var(--ease-out), transform 0.5s var(--ease-out);
+}
+.reveal-stagger.revealed > *:nth-child(1) { transition-delay: 0s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.revealed > *:nth-child(2) { transition-delay: 0.08s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.revealed > *:nth-child(3) { transition-delay: 0.16s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.revealed > *:nth-child(4) { transition-delay: 0.24s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.revealed > *:nth-child(5) { transition-delay: 0.32s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.revealed > *:nth-child(6) { transition-delay: 0.40s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.revealed > *:nth-child(7) { transition-delay: 0.48s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.revealed > *:nth-child(8) { transition-delay: 0.56s; opacity: 1; transform: translateY(0); }
+
+/* —— 骨架屏 —— */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    var(--bg-elevated) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite linear;
+  border-radius: var(--radius-sm);
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-text {
+  height: 14px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-xs);
+}
+.skeleton-text:last-child { width: 60%; }
+
+/* —— 3D 卡片倾斜 —— */
+.card-3d {
+  transition: transform 0.4s var(--ease-out), box-shadow 0.4s var(--ease-out);
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+.card-3d:hover {
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+}
+
+/* —— 渐变边框流动 —— */
+.gradient-border {
+  position: relative;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+}
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--gradient-brand);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+}
+.gradient-border:hover::before {
+  opacity: 1;
+}
+
+/* —— 消息气泡入场增强 —— */
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.msg-enter {
+  animation: message-in 0.4s var(--ease-out) backwards;
+}
+
+/* —— 打字光标增强 —— */
+@keyframes typing-cursor {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+.typing-cursor::after {
+  content: '▊';
+  animation: typing-cursor 0.8s step-end infinite;
+  color: var(--primary);
+  margin-left: 2px;
+}
+
+/* —— 悬浮发光 —— */
+.glow-hover {
+  transition: box-shadow 0.3s var(--ease), transform 0.3s var(--ease);
+}
+.glow-hover:hover {
+  box-shadow: var(--shadow-glow);
+  transform: translateY(-2px);
+}
+
+/* —— 数字滚动动画 —— */
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.count-up {
+  animation: count-up 0.5s var(--ease-out) backwards;
+}
+
+/* —— 响应式断点 —— */
+@media (max-width: 768px) {
+  .reveal, .reveal-scale, .reveal-left {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* ============================================================
+   高级布局与动效（融合自「高级 CSS 布局与动效」展示页）
+   新增：@property 动画 · 极光描边 · 流体字号 · Subgrid ·
+        容器查询 · :has() · 滚动进度条 · 视图过渡
+   ============================================================ */
+
+/* —— 注册可动画的自定义属性（让 <angle>/<number> 可被关键帧平滑插值）—— */
+@property --angle { syntax: "<angle>";  initial-value: 0deg;  inherits: false; }
+@property --hue   { syntax: "<number>"; initial-value: 210;   inherits: false; }
+@property --glow  { syntax: "<number>"; initial-value: 0;     inherits: false; }
+
+/* —— 极光描边（展示页签名效果）：旋转的 conic 渐变边框 —— */
+.aurora {
+  position: relative;
+  isolation: isolate;
+  border-radius: var(--radius-lg);
+}
+.aurora::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--angle),
+    var(--secondary), var(--primary), var(--accent-pink), var(--secondary)
+  );
+  animation: aurora-spin 8s linear infinite;
+  filter: blur(0.4px);
+}
+@keyframes aurora-spin { to { --angle: 360deg; } }
+
+/* —— 渐变边框：新增「持续旋转」变体（原 .gradient-border 为悬停静态）—— */
+.gradient-border--spin {
+  position: relative;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+}
+.gradient-border--spin::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(from var(--angle), var(--primary), var(--secondary), var(--accent-pink), var(--primary));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: aurora-spin 6s linear infinite;
+}
+
+/* —— 流体字号工具类 —— */
+.u-step--1 { font-size: var(--step--1); }
+.u-step-0  { font-size: var(--step-0); }
+.u-step-1  { font-size: var(--step-1); }
+.u-step-2  { font-size: var(--step-2); }
+.u-step-3  { font-size: var(--step-3); }
+
+/* —— Subgrid：跨卡片对齐标题 / 描述 / 页脚 —— */
+.u-subgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-rows: auto auto auto;
+  gap: 1.25rem;
+}
+.u-tile {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  gap: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  transition: transform var(--transition), border-color var(--transition);
+}
+.u-tile:hover { transform: translateY(-6px); border-color: var(--border-primary); }
+
+/* —— 容器查询：组件按「容器宽度」自适应 —— */
+.u-cq { container-type: inline-size; }
+.u-cq-card { display: flex; flex-direction: column; gap: 1rem; }
+.u-cq-card .thumb {
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--secondary), var(--primary));
+  opacity: 0.9;
+}
+@container (min-width: 460px) {
+  .u-cq-card { flex-direction: row; align-items: center; }
+  .u-cq-card .thumb { width: 40%; flex: none; }
+}
+
+/* —— :has() 父级响应：子元素聚焦时整块高亮 —— */
+.u-has-field:has(input:focus),
+.u-has-field:has(.el-input__wrapper.is-focus) {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.12);
+}
+.u-has-field:has(button:active) { transform: scale(0.99); }
+
+/* —— 滚动进度条（由 App.vue 的 scroll 监听写入 --scroll-progress）—— */
+.scroll-progress {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  z-index: 999;
+  transform: scaleX(var(--scroll-progress, 0));
+  transform-origin: 0 50%;
+  background: linear-gradient(90deg, var(--secondary), var(--primary), var(--accent-pink));
+  pointer-events: none;
+}
+
+/* —— 视图过渡（View Transitions API，由 main.js 路由跳转触发）—— */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.4s;
+  animation-timing-function: var(--ease-out);
+}
+::view-transition-group(root) { animation-timing-function: var(--ease-out); }
+
+/* —— 无障碍：尊重「减少动态效果」—— */
+@media (prefers-reduced-motion: reduce) {
+  .aurora::before,
+  .gradient-border--spin::before { animation: none !important; }
+  .scroll-progress { display: none; }
+}

@@ -11,6 +11,8 @@ import Dashboard from './views/Dashboard.vue'
 import AgentFlow from './views/AgentFlow.vue'
 import './assets/styles/variables.css'
 import './assets/styles/main.css'
+import { vMagnetic } from './composables/useMagnetic'
+import { vReveal } from './composables/useReveal'
 
 const routes = [
   { path: '/login', name: 'Login', component: Login, meta: { guest: true } },
@@ -22,6 +24,15 @@ const router = createRouter({
   history: createWebHistory(),
   routes
 })
+
+// 融合：路由跳转启用 View Transitions（不支持的浏览器自动回退为普通跳转）
+const _routerPush = router.push.bind(router)
+router.push = (to, ...rest) => {
+  if (typeof document !== 'undefined' && document.startViewTransition) {
+    return document.startViewTransition(() => _routerPush(to, ...rest))
+  }
+  return _routerPush(to, ...rest)
+}
 
 // 路由守卫：未登录跳转到登录页
 router.beforeEach((to, from, next) => {
@@ -43,4 +54,6 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 
 app.use(ElementPlus, { locale: zhCn })
 app.use(router)
+app.directive('magnetic', vMagnetic)
+app.directive('reveal', vReveal)
 app.mount('#app')
